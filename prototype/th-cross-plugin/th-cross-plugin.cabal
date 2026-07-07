@@ -16,5 +16,6 @@ library
     , base >= 4.19 && < 4.20
     , bytestring
     , ghc == 9.8.4
+    , process
   ghc-options:
       -Wall
