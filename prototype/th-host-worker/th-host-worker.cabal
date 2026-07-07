@@ -11,6 +11,8 @@ executable th-host-worker
   build-depends:
       base >= 4.19 && < 4.20
     , bytestring
+    , directory
+    , process
     , th-cross-plugin
   ghc-options:
       -Wall
