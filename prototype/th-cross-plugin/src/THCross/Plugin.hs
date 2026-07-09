@@ -111,6 +111,13 @@ loggingMetaHook mode request spliceExpr = do
             Right text -> pure text
           generated <- parseExpressionFragment generatedText
           pure (wrap generated)
+    _
+      | WorkerMode{} <- mode -> do
+          let err =
+                "THCross worker mode currently supports only expression splices; got "
+                  <> kindText
+          liftIO $ putStrLn ("unsupported-splice-kind: " <> err)
+          fail err
     _ -> defaultRunMeta request spliceExpr
 
 -- | Runtime behavior selected by plugin options.
