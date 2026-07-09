@@ -105,7 +105,9 @@ loggingMetaHook mode request spliceExpr = do
                 mkSpliceRequest modText kind sourceLoc spanText exprText
           liftIO $ putStrLn ("worker: " <> workerPath)
           generatedText <- callWorker workerPath workerRequest >>= \case
-            Left err -> fail err
+            Left err -> do
+              liftIO $ putStrLn ("worker-error: " <> err)
+              fail err
             Right text -> pure text
           generated <- parseExpressionFragment generatedText
           pure (wrap generated)

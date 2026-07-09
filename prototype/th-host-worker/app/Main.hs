@@ -1,29 +1,63 @@
 -- | Trivial native host worker for the first end-to-end prototype.
 --
 -- The worker reads JSON-lines splice requests from stdin and writes JSON-lines
--- responses to stdout. Expression splices are evaluated by a temporary native
--- @runghc@ runner and converted back to Haskell source with TH's 'pprint'.
+-- responses to stdout. Expression splices are evaluated by loading the source
+-- module in a native GHC session and wrapping GHC's normal TH evaluator.
+{-# LANGUAGE LambdaCase #-}
+
 module Main (main) where
 
-import Control.Exception (IOException, bracket, catch)
+import Control.Exception (SomeException, catch, displayException)
 import qualified Data.ByteString.Lazy.Char8 as BL
-import System.Directory (getTemporaryDirectory, removeFile)
-import System.Exit (ExitCode (..))
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Data.List (find)
+import Data.Maybe (fromMaybe)
+import GHC
+  ( Ghc
+  , GhcMonad (getSession)
+  , LoadHowMuch (LoadAllTargets)
+  , SuccessFlag (..)
+  , guessTarget
+  , getSessionDynFlags
+  , load
+  , runGhc
+  , setSession
+  , setSessionDynFlags
+  , setTargets
+  )
+import GHC.Driver.Env.Types (HscEnv (..))
+import GHC.Driver.Session (GeneralFlag (Opt_ForceRecomp), gopt_set)
+import GHC.Driver.Hooks (Hooks (..))
+import GHC.Hs (GhcPs, GhcTc, LHsExpr)
+import GHC.Parser.Annotation (getLocA)
+import GHC.Tc.Gen.Splice (defaultRunMeta)
+import GHC.Tc.Types (TcGblEnv (..), TcM)
+import GHC.Tc.Utils.Monad (getGblEnv, liftIO)
+import GHC.Types.Meta
+  ( MetaHook
+  , MetaRequest (..)
+  , metaRequestE
+  )
+import GHC.Types.SrcLoc
+  ( SrcSpan (..)
+  , srcSpanEndCol
+  , srcSpanEndLine
+  , srcSpanStartCol
+  , srcSpanStartLine
+  )
+import GHC.Unit.Module (moduleName, moduleNameString)
+import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import System.IO
   ( BufferMode (LineBuffering)
-  , Handle
-  , hClose
   , hSetBuffering
-  , hSetEncoding
   , isEOF
-  , openTempFile
   , stderr
   , stdout
-  , utf8
   )
-import System.Process (proc, readCreateProcessWithExitCode)
+import System.Process (readProcess)
 import THCross.Protocol
-  ( SpliceKind (..)
+  ( SourceSpan (..)
+  , SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
   , decodeRequestLine
@@ -78,7 +112,7 @@ handleRequest request =
 -- | Evaluate the request expression and preserve the original request id.
 evaluateExpressionSplice :: SpliceRequest -> IO SpliceResponse
 evaluateExpressionSplice request = do
-  result <- runExpressionRunner (requestSpliceExpression request)
+  result <- evaluateModuleExpressionSplice request `catch` handleEvalException
   pure $
     case result of
       Right generated ->
@@ -86,109 +120,109 @@ evaluateExpressionSplice request = do
       Left err ->
         SpliceError (requestId request) err
 
--- | Evaluate an expression splice as TH and return pretty-printed Haskell.
---
--- Normal expression splices have type @Q Exp@. The fallback accepts @Q (Q Exp)@
--- via 'join' only to cover simple experimental inputs such as @pure [| 42 |]@;
--- it is not a replacement for real GHC splice typechecking.
-runExpressionRunner :: String -> IO (Either String String)
-runExpressionRunner expression = do
-  direct <- runSpliceEvalSource (spliceEvalSource DirectExpression expression)
-  case direct of
-    Right generated ->
-      pure (Right generated)
-    Left directErr -> do
-      joined <- runSpliceEvalSource (spliceEvalSource JoinedExpression expression)
-      pure $
-        case joined of
-          Right generated ->
-            Right generated
-          Left joinedErr ->
-            Left
-              ( "failed to evaluate expression splice as Q Exp:\n"
-                  <> directErr
-                  <> "\nfailed to evaluate expression splice as Q (Q Exp):\n"
-                  <> joinedErr
-              )
+handleEvalException :: SomeException -> IO (Either String String)
+handleEvalException =
+  pure . Left . ("native GHC splice evaluation failed: " <>) . displayException
 
-data SpliceEvalMode
-  = DirectExpression
-  | JoinedExpression
+-- | Compile the source module with native GHC and capture expression splice
+-- expansions produced by GHC's normal Template Haskell evaluator.
+evaluateModuleExpressionSplice :: SpliceRequest -> IO (Either String String)
+evaluateModuleExpressionSplice request = do
+  capturesRef <- newIORef []
+  ghcLibDir <- getGhcLibDir
+  result <- runGhc (Just ghcLibDir) $ do
+    dflags <- getSessionDynFlags
+    _ <- setSessionDynFlags (gopt_set dflags Opt_ForceRecomp)
+    installCaptureHook capturesRef
+    target <- guessTarget (requestSourceFile request) Nothing Nothing
+    setTargets [target]
+    load LoadAllTargets
+  case result of
+    Failed ->
+      pure (Left ("host GHC failed to load " <> requestSourceFile request))
+    Succeeded -> do
+      captures <- readIORef capturesRef
+      pure (selectCapturedExpression request captures)
 
--- | Build a temporary Haskell program that evaluates one splice expression.
---
--- This isolated program has no context from the source module. That is the main
--- Task 7 limitation and the reason later tasks need module-aware GHC sessions.
-spliceEvalSource :: SpliceEvalMode -> String -> String
-spliceEvalSource mode expression =
-  unlines
-    [ "{-# LANGUAGE TemplateHaskell #-}"
-    , "module Main where"
-    , "import Control.Monad (join)"
-    , "import Language.Haskell.TH"
-    , "import Language.Haskell.TH.Ppr (pprint)"
-    , "import Language.Haskell.TH.Syntax (runQ)"
-    , "main :: IO ()"
-    , "main = do"
-    , "  generated <- runQ (" <> spliceEvalExpression mode expression <> ")"
-    , "  putStrLn (pprint generated)"
-    ]
+getGhcLibDir :: IO FilePath
+getGhcLibDir =
+  trimTrailingNewline <$> readProcess "ghc" ["--print-libdir"] ""
 
--- | Wrap the user splice expression with the type expected by the eval module.
-spliceEvalExpression :: SpliceEvalMode -> String -> String
-spliceEvalExpression mode expression =
-  case mode of
-    DirectExpression ->
-      "(" <> expression <> " :: Q Exp)"
-    JoinedExpression ->
-      "(join (" <> expression <> ") :: Q Exp)"
+-- | Install a host-only hook that delegates to the previous hook/default GHC
+-- evaluator, records the generated expression, and returns it unchanged.
+installCaptureHook :: IORef [CapturedExpression] -> Ghc ()
+installCaptureHook capturesRef = do
+  hscEnv <- getSession
+  let hooks0 = hsc_hooks hscEnv
+      previousHook = runMetaHook hooks0
+      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook capturesRef previousHook)}
+  setSession hscEnv {hsc_hooks = hooks1}
 
--- | Execute the generated splice evaluation source with native @runghc@.
-runSpliceEvalSource :: String -> IO (Either String String)
-runSpliceEvalSource source =
-  withTempSpliceEvalFile source $ \sourcePath -> do
-    (exitCode, out, err) <-
-      readCreateProcessWithExitCode (proc "runghc" [sourcePath]) ""
-    pure $
-      case exitCode of
-        ExitSuccess ->
-          Right (trimTrailingNewline out)
-        ExitFailure code ->
-          Left ("runghc exited with code " <> show code <> ":\n" <> err)
+captureMetaHook :: IORef [CapturedExpression] -> Maybe (MetaHook TcM) -> MetaHook TcM
+captureMetaHook capturesRef previousHook request spliceExpr =
+  case request of
+    MetaE wrap -> do
+      expanded <- metaRequestE selectedHook spliceExpr
+      capture <- mkCapturedExpression spliceExpr expanded
+      liftIO $ modifyIORef' capturesRef (capture :)
+      pure (wrap expanded)
+    _ ->
+      selectedHook request spliceExpr
+  where
+    selectedHook = fromMaybe defaultRunMeta previousHook
 
--- | Write a temporary @.hs@ source file, run an action with its path, and remove
--- it afterwards.
---
--- 'openTempFile' chooses a unique file name atomically, so concurrent requests
--- do not collide on the temporary source path.
-withTempSpliceEvalFile :: String -> (FilePath -> IO a) -> IO a
-withTempSpliceEvalFile source action = do
-  tempDir <- getTemporaryDirectory
-  bracket
-    (openSpliceEvalFile tempDir)
-    closeAndRemove
-    ( \(path, handle) -> do
-        hSetEncoding handle utf8
-        hClose handle
-        writeFile path source
-        action path
-    )
+data CapturedExpression = CapturedExpression
+  { capturedModuleName :: !String
+  , capturedSourceSpan :: !SourceSpan
+  , capturedExpression :: !String
+  , capturedGeneratedHaskell :: !String
+  }
+  deriving (Eq, Show)
 
--- | Create a uniquely named temporary Haskell source file.
-openSpliceEvalFile :: FilePath -> IO (FilePath, Handle)
-openSpliceEvalFile tempDir =
-  openTempFile tempDir "th-cross-splice-eval-.hs"
+mkCapturedExpression :: LHsExpr GhcTc -> LHsExpr GhcPs -> TcM CapturedExpression
+mkCapturedExpression spliceExpr expanded = do
+  tcg <- getGblEnv
+  let modText = moduleNameString (moduleName (tcg_mod tcg))
+      sourceSpan = protocolSourceSpan (getLocA spliceExpr)
+      exprText = showSDocUnsafe (ppr spliceExpr)
+      generatedText = showSDocUnsafe (ppr expanded)
+  pure
+    CapturedExpression
+      { capturedModuleName = modText
+      , capturedSourceSpan = sourceSpan
+      , capturedExpression = exprText
+      , capturedGeneratedHaskell = generatedText
+      }
 
--- | Best-effort cleanup for the temporary source handle and file.
-closeAndRemove :: (FilePath, Handle) -> IO ()
-closeAndRemove (path, handle) = do
-  hClose handle `catch` ignoreIOException
-  removeFile path `catch` ignoreIOException
+protocolSourceSpan :: SrcSpan -> SourceSpan
+protocolSourceSpan = \case
+  RealSrcSpan realSpan _ ->
+    SourceSpan
+      { sourceSpanStartLine = srcSpanStartLine realSpan
+      , sourceSpanStartColumn = srcSpanStartCol realSpan
+      , sourceSpanEndLine = srcSpanEndLine realSpan
+      , sourceSpanEndColumn = srcSpanEndCol realSpan
+      }
+  UnhelpfulSpan _ ->
+    SourceSpan 1 1 1 1
 
-ignoreIOException :: IOException -> IO ()
-ignoreIOException _ = pure ()
+selectCapturedExpression :: SpliceRequest -> [CapturedExpression] -> Either String String
+selectCapturedExpression request captures =
+  case find (matchesRequest request) captures of
+    Just capture ->
+      Right (capturedGeneratedHaskell capture)
+    Nothing ->
+      Left $
+        "host GHC did not capture requested expression splice; captured "
+          <> show (length captures)
+          <> " expression splice(s): "
+          <> show captures
 
--- | Drop the final line ending produced by the splice eval program.
+matchesRequest :: SpliceRequest -> CapturedExpression -> Bool
+matchesRequest request capture =
+  capturedModuleName capture == requestModuleName request
+    && capturedSourceSpan capture == requestSourceSpan request
+
 trimTrailingNewline :: String -> String
 trimTrailingNewline =
   reverse . dropWhile (`elem` ['\n', '\r']) . reverse

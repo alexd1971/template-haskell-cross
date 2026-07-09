@@ -1,94 +1,124 @@
-# Host Worker Evaluation MVP
+# Host Worker Evaluation
 
-This document records the selected Task 7 approach for the first native
-host-side Template Haskell evaluation prototype.
+This document records the current host-side Template Haskell evaluation
+prototype.
 
-## Goal
+## Current Approach
 
-The worker should evaluate a simple expression splice on the build host and
-return textual Haskell to the cross-side GHC plugin.
+The worker evaluates expression splices by loading the source module in a native
+GHC session.
 
-Supported MVP input:
+Flow:
+
+```text
+worker receives expression splice request
+  -> run native GHC 9.8.4
+  -> install host-only runMetaHook
+  -> load request.sourceFile
+  -> defaultRunMeta executes TH normally
+  -> hook captures generated LHsExpr GhcPs
+  -> worker pretty-prints the captured expansion
+  -> worker returns generatedHaskell over JSON Lines
+```
+
+This replaces the earlier Task 7 isolated `runghc` splice-eval file. The old
+approach proved the process boundary, but it did not have module context and
+could not support `reify`.
+
+## Hook Shape
+
+The host worker hook wraps the previous hook or `defaultRunMeta`:
 
 ```haskell
+captureMetaHook :: IORef [CapturedExpression] -> Maybe (MetaHook TcM) -> MetaHook TcM
+captureMetaHook captures previous request spliceExpr =
+  case request of
+    MetaE wrap -> do
+      expanded <- metaRequestE selectedHook spliceExpr
+      record spliceExpr expanded
+      pure (wrap expanded)
+    _ ->
+      selectedHook request spliceExpr
+  where
+    selectedHook = fromMaybe defaultRunMeta previous
+```
+
+The host GHC session must not install the cross-side delegating hook. It should
+run normal Template Haskell locally on the build host.
+
+## Matching
+
+The MVP matches a captured expression splice by:
+
+```text
+module name
+source span
+```
+
+The request still carries the pretty-printed splice expression, but the current
+selector does not require expression text equality. Task 11 should replace this
+with a stable splice key.
+
+## Supported Case
+
+Simple expression splice:
+
+```haskell
+foo :: Int
 foo = $([| 42 |])
 ```
 
-The worker returns:
-
-```haskell
-42
-```
-
-## Selected Approach
-
-For each expression splice request, the worker creates a temporary Haskell
-splice evaluation module and executes it with `runghc`.
-
-The generated splice evaluation module conceptually looks like:
+Module-aware `reify`:
 
 ```haskell
 {-# LANGUAGE TemplateHaskell #-}
 
-module Main where
+module ReifyExpr where
 
-import Control.Monad (join)
-import Language.Haskell.TH
-import Language.Haskell.TH.Ppr (pprint)
-import Language.Haskell.TH.Syntax (runQ)
+import Language.Haskell.TH (reify)
 
-main :: IO ()
-main = do
-  generated <- runQ ((SPLICE_EXPRESSION) :: Q Exp)
-  putStrLn (pprint generated)
+data User = User String
+
+$(pure [])
+
+foo :: Int
+foo =
+  $( do
+       _ <- reify ''User
+       [| 42 |]
+   )
 ```
 
-The worker captures stdout and returns it as `generatedHaskell`.
+The top-level `$(pure [])` is needed to split declaration groups so normal GHC
+staging makes `User` visible to `reify`.
 
-The worker also tries a fallback form:
+## Current Limitations
 
-```haskell
-runQ (join (SPLICE_EXPRESSION) :: Q Exp)
-```
+Still unsupported:
 
-This is only a compatibility experiment for expressions that produce
-`Q (Q Exp)`. It is not a substitute for normal GHC splice typechecking.
+- persistent worker sessions;
+- whole-module expansion caching;
+- declaration, type, and pattern splices over the worker protocol;
+- target-only modules/imports;
+- target-like CPP/package configuration;
+- `Q` side-effect replay;
+- stable splice keys.
 
-## Why This Approach
+The cross-side plugin still delegates non-expression splices to local
+`defaultRunMeta`. That is acceptable for the current expression-only Task 9
+prototype but is not acceptable for real cross compilation.
 
-This is the smallest end-to-end implementation that proves the desired data
-flow:
+## Operational Notes
+
+The worker calls:
 
 ```text
-plugin sends splice text
-  -> native worker executes TH
-  -> worker pretty-prints TH Exp
-  -> plugin parses generated Haskell locally
+ghc --print-libdir
 ```
 
-It avoids using GHC internals in the worker before the basic protocol and
-process boundary are proven.
+and passes that path to `runGhc`. Without this, an executable launched from
+`dist-newstyle` can make `runGhc Nothing` look for `lib/settings` relative to
+the worker binary.
 
-## Limitations
-
-This is not module-aware evaluation.
-
-Unsupported in this MVP:
-
-- `reify`
-- local declaration-group context
-- imports from the module containing the splice
-- target-specific package/module environments
-- declaration, type, and pattern splices
-- `Q` side-effect replay
-- persistent GHC sessions
-
-The temporary splice evaluation module only sees its own imports plus the implicit Prelude. This
-means splices that depend on names from the original module are expected to
-fail until Task 9.
-
-## Next Step
-
-Task 9 should replace this isolated runner with module-aware host evaluation in
-a native GHC session. That is required for `reify` and normal Template Haskell
-staging semantics.
+The worker also enables `Opt_ForceRecomp` in the native GHC session so cached
+`.hi`/`.o` files do not bypass TH execution and leave the capture list empty.
