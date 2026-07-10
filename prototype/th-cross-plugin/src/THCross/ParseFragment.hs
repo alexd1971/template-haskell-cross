@@ -4,7 +4,8 @@
 -- For the prototype wire format we therefore exchange textual Haskell and
 -- parse it locally into @GhcPs@ nodes instead of transferring GHC AST values.
 module THCross.ParseFragment
-  ( parseExpressionFragment
+  ( parseDeclarationFragments
+  , parseExpressionFragment
   ) where
 
 import GHC.Data.FastString (mkFastString)
@@ -17,8 +18,8 @@ import GHC.Driver.DynFlags
   , targetPlatform
   )
 import GHC.Driver.Session (safeImportsOn, supportedLanguagesAndExtensions)
-import GHC.Hs (GhcPs, LHsExpr)
-import GHC.Parser (parseExpression)
+import GHC.Hs (GhcPs, HsModule (..), LHsDecl, LHsExpr)
+import GHC.Parser (parseExpression, parseModule)
 import GHC.Parser.Lexer
   ( P
   , PState
@@ -32,7 +33,7 @@ import GHC.Parser.PostProcess (PV, runPV, unECP)
 import GHC.Platform (platformArchOS)
 import GHC.Tc.Types (TcM)
 import GHC.Types.Error (isEmptyMessages)
-import GHC.Types.SrcLoc (mkRealSrcLoc)
+import GHC.Types.SrcLoc (mkRealSrcLoc, unLoc)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 
 -- | Parse a Haskell expression fragment into the parser-stage AST expected by
@@ -43,12 +44,33 @@ import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 parseExpressionFragment :: String -> TcM (LHsExpr GhcPs)
 parseExpressionFragment source = do
   dflags <- getDynFlags
-  runParserFragment dflags "<th-cross-expression-fragment>" source $ do
+  runParserFragment dflags "<expression-fragment>" source $ do
     ecp <- parseExpression
     runPV (unECP ecp :: PV (LHsExpr GhcPs))
 
-runParserFragment :: DynFlags -> FilePath -> String -> P a -> TcM a
-runParserFragment dflags fileName source parser =
+-- | Parse zero or more top-level declaration fragments into parser-stage AST.
+--
+-- TH declaration splices return declarations, not a complete module. GHC's
+-- parser entrypoint for multiple top-level declarations is 'parseModule', so we
+-- wrap the fragment in a synthetic module and then extract 'hsmodDecls'.
+parseDeclarationFragments :: String -> TcM [LHsDecl GhcPs]
+parseDeclarationFragments source = do
+  dflags <- getDynFlags
+  parsedModule <-
+    runParserFragment dflags "<declaration-fragment>" syntheticModule parseModule
+  pure (hsmodDecls (unLoc parsedModule))
+  where
+    syntheticModule =
+      "module DeclarationFragment where\n" <> source
+
+-- | Run a GHC parser entrypoint against an in-memory source fragment.
+--
+-- The synthetic source name is used only in parser diagnostics and source
+-- locations inside the returned parsed tree. The parser options come from the
+-- active 'DynFlags' so generated fragments see the same language extensions as
+-- the module currently being compiled.
+runParserFragment :: DynFlags -> String -> String -> P a -> TcM a
+runParserFragment dflags sourceName source parser =
   case unP parser parserState of
     PFailed pst ->
       fail (formatParseErrors pst)
@@ -62,7 +84,7 @@ runParserFragment dflags fileName source parser =
       initParserState
         parserOpts
         (stringToStringBuffer source)
-        (mkRealSrcLoc (mkFastString fileName) 1 1)
+        (mkRealSrcLoc (mkFastString sourceName) 1 1)
 
     parserOpts =
       mkParserOpts
@@ -74,6 +96,10 @@ runParserFragment dflags fileName source parser =
         False
         True
 
+-- | Render parser diagnostics as a plain 'fail' message in 'TcM'.
+--
+-- This keeps parse failures on the normal GHC diagnostic path for the splice
+-- currently being expanded.
 formatParseErrors :: PState -> String
 formatParseErrors pst =
   "failed to parse Haskell expression fragment: "

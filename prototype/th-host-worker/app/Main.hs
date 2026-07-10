@@ -1,7 +1,7 @@
 -- | Trivial native host worker for the first end-to-end prototype.
 --
 -- The worker reads JSON-lines splice requests from stdin and writes JSON-lines
--- responses to stdout. Expression splices are evaluated by loading the source
+-- responses to stdout. Supported splices are evaluated by loading the source
 -- module in a native GHC session and wrapping GHC's normal TH evaluator.
 {-# LANGUAGE LambdaCase #-}
 
@@ -26,9 +26,9 @@ import GHC
   , setTargets
   )
 import GHC.Driver.Env.Types (HscEnv (..))
-import GHC.Driver.Session (GeneralFlag (Opt_ForceRecomp), gopt_set)
+import GHC.Driver.Session (GeneralFlag (Opt_ForceRecomp), gopt_set, importPaths)
 import GHC.Driver.Hooks (Hooks (..))
-import GHC.Hs (GhcPs, GhcTc, LHsExpr)
+import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
 import GHC.Tc.Types (TcGblEnv (..), TcM)
@@ -36,6 +36,7 @@ import GHC.Tc.Utils.Monad (getGblEnv, liftIO)
 import GHC.Types.Meta
   ( MetaHook
   , MetaRequest (..)
+  , metaRequestD
   , metaRequestE
   )
 import GHC.Types.SrcLoc
@@ -46,7 +47,15 @@ import GHC.Types.SrcLoc
   , srcSpanStartLine
   )
 import GHC.Unit.Module (moduleName, moduleNameString)
-import GHC.Utils.Outputable (ppr, showSDocUnsafe)
+import GHC.Utils.Outputable
+  ( SDoc
+  , defaultSDocContext
+  , ppr
+  , renderWithContext
+  , sdocSuppressUniques
+  , showSDocUnsafe
+  )
+import System.FilePath (takeDirectory)
 import System.IO
   ( BufferMode (LineBuffering)
   , hSetBuffering
@@ -96,23 +105,26 @@ handleLine line =
 
 -- | Dispatch by splice kind.
 --
--- The Task 7 MVP only evaluates expression splices; other splice kinds stay
--- unsupported until the parser and worker both handle their result shapes.
+-- The prototype currently evaluates expression and declaration splices. Type,
+-- pattern, and annotation-wrapper splices stay unsupported until the parser and
+-- worker both handle their result shapes.
 handleRequest :: SpliceRequest -> IO SpliceResponse
 handleRequest request =
   case requestSpliceKind request of
     ExpressionSplice ->
-      evaluateExpressionSplice request
+      evaluateModuleSplice request
+    DeclarationSplice ->
+      evaluateModuleSplice request
     _ ->
       pure $
         SpliceError
           (requestId request)
-          "th-host-worker MVP only supports expression splices"
+          "th-host-worker MVP only supports expression and declaration splices"
 
--- | Evaluate the request expression and preserve the original request id.
-evaluateExpressionSplice :: SpliceRequest -> IO SpliceResponse
-evaluateExpressionSplice request = do
-  result <- evaluateModuleExpressionSplice request `catch` handleEvalException
+-- | Evaluate the requested splice and preserve the original request id.
+evaluateModuleSplice :: SpliceRequest -> IO SpliceResponse
+evaluateModuleSplice request = do
+  result <- evaluateModuleSpliceText request `catch` handleEvalException
   pure $
     case result of
       Right generated ->
@@ -120,19 +132,30 @@ evaluateExpressionSplice request = do
       Left err ->
         SpliceError (requestId request) err
 
+-- | Convert unexpected GHC API/runtime exceptions into protocol errors.
 handleEvalException :: SomeException -> IO (Either String String)
 handleEvalException =
   pure . Left . ("native GHC splice evaluation failed: " <>) . displayException
 
--- | Compile the source module with native GHC and capture expression splice
--- expansions produced by GHC's normal Template Haskell evaluator.
-evaluateModuleExpressionSplice :: SpliceRequest -> IO (Either String String)
-evaluateModuleExpressionSplice request = do
+-- | Compile the source module with native GHC and capture splice expansions
+-- produced by GHC's normal Template Haskell evaluator.
+--
+-- This is the host-side equivalent of normal module compilation. The worker
+-- creates a native GHC session, adds the source directory to the import path,
+-- installs a capture hook, sets the requested source file as the target, and
+-- calls 'load'. During 'load', GHC performs normal declaration-group ordering and
+-- invokes the hook for each splice it encounters.
+evaluateModuleSpliceText :: SpliceRequest -> IO (Either String String)
+evaluateModuleSpliceText request = do
   capturesRef <- newIORef []
   ghcLibDir <- getGhcLibDir
   result <- runGhc (Just ghcLibDir) $ do
     dflags <- getSessionDynFlags
-    _ <- setSessionDynFlags (gopt_set dflags Opt_ForceRecomp)
+    let sourceDir = takeDirectory (requestSourceFile request)
+        dflagsWithSourceDir =
+          (gopt_set dflags Opt_ForceRecomp)
+            {importPaths = sourceDir : importPaths dflags}
+    setSessionDynFlags dflagsWithSourceDir
     installCaptureHook capturesRef
     target <- guessTarget (requestSourceFile request) Nothing Nothing
     setTargets [target]
@@ -142,58 +165,109 @@ evaluateModuleExpressionSplice request = do
       pure (Left ("host GHC failed to load " <> requestSourceFile request))
     Succeeded -> do
       captures <- readIORef capturesRef
-      pure (selectCapturedExpression request captures)
+      pure (selectCapturedSplice request captures)
 
+-- | Locate the native GHC library directory used to initialize 'runGhc'.
+--
+-- The prototype shells out to @ghc --print-libdir@ so the worker uses the same
+-- GHC installation that built/runs it. A packaged version should make this more
+-- explicit.
 getGhcLibDir :: IO FilePath
 getGhcLibDir =
   trimTrailingNewline <$> readProcess "ghc" ["--print-libdir"] ""
 
 -- | Install a host-only hook that delegates to the previous hook/default GHC
--- evaluator, records the generated expression, and returns it unchanged.
-installCaptureHook :: IORef [CapturedExpression] -> Ghc ()
+-- evaluator, records the generated splice, and returns it unchanged.
+installCaptureHook :: IORef [CapturedSplice] -> Ghc ()
 installCaptureHook capturesRef = do
   hscEnv <- getSession
   let hooks0 = hsc_hooks hscEnv
-      previousHook = runMetaHook hooks0
-      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook capturesRef previousHook)}
+      previousRunMeta = runMetaHook hooks0
+      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook capturesRef previousRunMeta)}
   setSession hscEnv {hsc_hooks = hooks1}
 
-captureMetaHook :: IORef [CapturedExpression] -> Maybe (MetaHook TcM) -> MetaHook TcM
-captureMetaHook capturesRef previousHook request spliceExpr =
+-- | Host-side 'runMetaHook' wrapper that records expansions without changing
+-- native evaluation behavior.
+--
+-- For supported splice kinds, it delegates to the previous runMeta hook or
+-- 'defaultRunMeta' first. That produces the real @GhcPs@ expansion in the native
+-- session. The hook then pretty-prints the expansion, stores it in 'capturesRef',
+-- and returns the original expansion back to GHC so module loading continues.
+captureMetaHook :: IORef [CapturedSplice] -> Maybe (MetaHook TcM) -> MetaHook TcM
+captureMetaHook capturesRef previousRunMeta request spliceExpr =
   case request of
     MetaE wrap -> do
-      expanded <- metaRequestE selectedHook spliceExpr
-      capture <- mkCapturedExpression spliceExpr expanded
+      expanded <- metaRequestE runMeta spliceExpr
+      generatedText <- prettyExpandedExpression expanded
+      capture <- mkCapturedSplice ExpressionSplice spliceExpr generatedText
+      liftIO $ modifyIORef' capturesRef (capture :)
+      pure (wrap expanded)
+    MetaD wrap -> do
+      expanded <- metaRequestD runMeta spliceExpr
+      generatedText <- prettyExpandedDeclarations expanded
+      capture <- mkCapturedSplice DeclarationSplice spliceExpr generatedText
       liftIO $ modifyIORef' capturesRef (capture :)
       pure (wrap expanded)
     _ ->
-      selectedHook request spliceExpr
+      runMeta request spliceExpr
   where
-    selectedHook = fromMaybe defaultRunMeta previousHook
+    runMeta = fromMaybe defaultRunMeta previousRunMeta
 
-data CapturedExpression = CapturedExpression
+-- | One splice expansion observed while native GHC loaded the requested module.
+--
+-- The generated Haskell text is the payload returned to the cross-side plugin.
+-- The remaining fields are the current MVP matching key. Task 11 should replace
+-- source-span matching with a stable splice identity.
+data CapturedSplice = CapturedSplice
   { capturedModuleName :: !String
+  , capturedSpliceKind :: !SpliceKind
   , capturedSourceSpan :: !SourceSpan
   , capturedExpression :: !String
   , capturedGeneratedHaskell :: !String
   }
   deriving (Eq, Show)
 
-mkCapturedExpression :: LHsExpr GhcTc -> LHsExpr GhcPs -> TcM CapturedExpression
-mkCapturedExpression spliceExpr expanded = do
+-- | Attach module, kind, source span, and original expression text to a captured
+-- expansion.
+--
+-- This runs in 'TcM' inside the host compiler, so it can read the current
+-- 'TcGblEnv' to discover which module is being compiled when the splice fires.
+mkCapturedSplice :: SpliceKind -> LHsExpr GhcTc -> String -> TcM CapturedSplice
+mkCapturedSplice spliceKind spliceExpr generatedText = do
   tcg <- getGblEnv
   let modText = moduleNameString (moduleName (tcg_mod tcg))
       sourceSpan = protocolSourceSpan (getLocA spliceExpr)
       exprText = showSDocUnsafe (ppr spliceExpr)
-      generatedText = showSDocUnsafe (ppr expanded)
   pure
-    CapturedExpression
+    CapturedSplice
       { capturedModuleName = modText
+      , capturedSpliceKind = spliceKind
       , capturedSourceSpan = sourceSpan
       , capturedExpression = exprText
       , capturedGeneratedHaskell = generatedText
       }
 
+-- | Convert a generated expression AST back to textual Haskell for the wire
+-- format.
+prettyExpandedExpression :: LHsExpr GhcPs -> TcM String
+prettyExpandedExpression =
+  pure . renderHaskell . ppr
+
+-- | Convert generated declaration ASTs back to textual Haskell for the wire
+-- format.
+prettyExpandedDeclarations :: [LHsDecl GhcPs] -> TcM String
+prettyExpandedDeclarations =
+  pure . unlines . map (renderHaskell . ppr)
+
+-- | Render Haskell without GHC-generated uniques.
+--
+-- Suppressing uniques keeps declarations such as generated data constructors
+-- readable and reparsable by the cross-side compiler.
+renderHaskell :: SDoc -> String
+renderHaskell =
+  renderWithContext defaultSDocContext {sdocSuppressUniques = True}
+
+-- | Convert a GHC source span into the protocol span used for matching.
 protocolSourceSpan :: SrcSpan -> SourceSpan
 protocolSourceSpan = \case
   RealSrcSpan realSpan _ ->
@@ -206,23 +280,31 @@ protocolSourceSpan = \case
   UnhelpfulSpan _ ->
     SourceSpan 1 1 1 1
 
-selectCapturedExpression :: SpliceRequest -> [CapturedExpression] -> Either String String
-selectCapturedExpression request captures =
+-- | Find the host-side expansion corresponding to the cross-side request.
+--
+-- Loading a module can execute several splices. The worker currently selects by
+-- module name, splice kind, and source span, then returns only the requested
+-- generated fragment.
+selectCapturedSplice :: SpliceRequest -> [CapturedSplice] -> Either String String
+selectCapturedSplice request captures =
   case find (matchesRequest request) captures of
     Just capture ->
       Right (capturedGeneratedHaskell capture)
     Nothing ->
       Left $
-        "host GHC did not capture requested expression splice; captured "
+        "host GHC did not capture requested splice; captured "
           <> show (length captures)
-          <> " expression splice(s): "
+          <> " splice(s): "
           <> show captures
 
-matchesRequest :: SpliceRequest -> CapturedExpression -> Bool
+-- | MVP splice matcher shared by expression and declaration splices.
+matchesRequest :: SpliceRequest -> CapturedSplice -> Bool
 matchesRequest request capture =
   capturedModuleName capture == requestModuleName request
+    && capturedSpliceKind capture == requestSpliceKind request
     && capturedSourceSpan capture == requestSourceSpan request
 
+-- | Remove trailing newlines from command output such as @ghc --print-libdir@.
 trimTrailingNewline :: String -> String
 trimTrailingNewline =
   reverse . dropWhile (`elem` ['\n', '\r']) . reverse

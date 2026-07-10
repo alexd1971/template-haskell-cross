@@ -5,18 +5,18 @@ prototype.
 
 ## Current Approach
 
-The worker evaluates expression splices by loading the source module in a native
-GHC session.
+The worker evaluates expression and declaration splices by loading the source
+module in a native GHC session.
 
 Flow:
 
 ```text
-worker receives expression splice request
+worker receives expression/declaration splice request
   -> run native GHC 9.8.4
   -> install host-only runMetaHook
   -> load request.sourceFile
   -> defaultRunMeta executes TH normally
-  -> hook captures generated LHsExpr GhcPs
+  -> hook captures generated GhcPs expansion
   -> worker pretty-prints the captured expansion
   -> worker returns generatedHaskell over JSON Lines
 ```
@@ -30,11 +30,15 @@ could not support `reify`.
 The host worker hook wraps the previous hook or `defaultRunMeta`:
 
 ```haskell
-captureMetaHook :: IORef [CapturedExpression] -> Maybe (MetaHook TcM) -> MetaHook TcM
+captureMetaHook :: IORef [CapturedSplice] -> Maybe (MetaHook TcM) -> MetaHook TcM
 captureMetaHook captures previous request spliceExpr =
   case request of
     MetaE wrap -> do
       expanded <- metaRequestE selectedHook spliceExpr
+      record spliceExpr expanded
+      pure (wrap expanded)
+    MetaD wrap -> do
+      expanded <- metaRequestD selectedHook spliceExpr
       record spliceExpr expanded
       pure (wrap expanded)
     _ ->
@@ -48,10 +52,11 @@ run normal Template Haskell locally on the build host.
 
 ## Matching
 
-The MVP matches a captured expression splice by:
+The MVP matches a captured splice by:
 
 ```text
 module name
+splice kind
 source span
 ```
 
@@ -92,21 +97,48 @@ foo =
 The top-level `$(pure [])` is needed to split declaration groups so normal GHC
 staging makes `User` visible to `reify`.
 
+Declaration-group ordering with generated declarations:
+
+```haskell
+{-# LANGUAGE TemplateHaskell #-}
+
+module DeclOrder where
+
+import DeclOrderGen (genUser)
+import Language.Haskell.TH (reify)
+
+$(genUser)
+
+$(pure [])
+
+foo :: Int
+foo =
+  $( do
+       _ <- reify ''GeneratedUser
+       [| 42 |]
+   )
+```
+
+Here `genUser` is imported from another module to satisfy normal GHC stage
+restrictions. The first declaration splice generates `GeneratedUser`; the empty
+declaration splice closes the declaration group; the later expression splice can
+then `reify ''GeneratedUser`.
+
 ## Current Limitations
 
 Still unsupported:
 
 - persistent worker sessions;
 - whole-module expansion caching;
-- declaration, type, and pattern splices over the worker protocol;
+- type and pattern splices over the worker protocol;
 - target-only modules/imports;
 - target-like CPP/package configuration;
 - `Q` side-effect replay;
 - stable splice keys.
 
-The cross-side plugin still delegates non-expression splices to local
-`defaultRunMeta`. That is acceptable for the current expression-only Task 9
-prototype but is not acceptable for real cross compilation.
+The cross-side plugin now routes expression and declaration splices through the
+worker in worker mode. Other splice kinds fail explicitly instead of falling
+back to local `defaultRunMeta`.
 
 ## Operational Notes
 
@@ -122,3 +154,11 @@ the worker binary.
 
 The worker also enables `Opt_ForceRecomp` in the native GHC session so cached
 `.hi`/`.o` files do not bypass TH execution and leave the capture list empty.
+
+The worker adds the requested source file directory to the native GHC session's
+`importPaths`. This lets module-aware evaluation find sibling generator modules
+used by test files.
+
+Generated declarations are pretty-printed with `sdocSuppressUniques = True`.
+Without this, GHC can print names like `GeneratedUser_a2aU`, which are valid
+debug output but wrong as textual Haskell returned to the cross-side parser.

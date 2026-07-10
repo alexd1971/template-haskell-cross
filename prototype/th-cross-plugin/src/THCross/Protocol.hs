@@ -31,10 +31,14 @@ import qualified Data.ByteString.Lazy as BL
 
 -- | 1-based source span for the splice as seen by the cross GHC process.
 data SourceSpan = SourceSpan
-  { sourceSpanStartLine :: !Int
-  , sourceSpanStartColumn :: !Int
-  , sourceSpanEndLine :: !Int
-  , sourceSpanEndColumn :: !Int
+  { -- | 1-based line where the splice starts.
+    sourceSpanStartLine :: !Int
+  , -- | 1-based column where the splice starts.
+    sourceSpanStartColumn :: !Int
+  , -- | 1-based line where the splice ends.
+    sourceSpanEndLine :: !Int
+  , -- | 1-based column where the splice ends.
+    sourceSpanEndColumn :: !Int
   }
   deriving (Eq, Show)
 
@@ -89,13 +93,21 @@ spliceKindText AnnotationWrapperSplice = "annotation-wrapper"
 
 -- | Request sent by the cross-side plugin to the native host worker.
 data SpliceRequest = SpliceRequest
-  { requestId :: !String
-  , requestModuleName :: !String
-  , requestSourceFile :: !FilePath
-  , requestSpliceKind :: !SpliceKind
-  , requestSourceSpan :: !SourceSpan
-  , requestSpliceExpression :: !String
-  , requestCrossGhcVersion :: !String
+  { -- | Correlation id echoed by the worker response.
+    requestId :: !String
+  , -- | Module currently being compiled by the cross-side GHC.
+    requestModuleName :: !String
+  , -- | Source file path that the host worker should load in native GHC.
+    requestSourceFile :: !FilePath
+  , -- | Splice result shape expected by the cross-side 'runMetaHook'.
+    requestSpliceKind :: !SpliceKind
+  , -- | Source span used by the MVP worker to select the captured splice.
+    requestSourceSpan :: !SourceSpan
+  , -- | Pretty-printed original splice expression for diagnostics and future
+    -- stable-key matching.
+    requestSpliceExpression :: !String
+  , -- | Version of the cross-side compiler that produced this request.
+    requestCrossGhcVersion :: !String
   }
   deriving (Eq, Show)
 
@@ -126,12 +138,16 @@ instance FromJSON SpliceRequest where
 -- | Response returned by the native host worker.
 data SpliceResponse
   = SpliceOk
-      { responseRequestId :: !String
-      , responseGeneratedHaskell :: !String
+      { -- | Correlation id copied from the request.
+        responseRequestId :: !String
+      , -- | Generated Haskell fragment parsed by the cross-side compiler.
+        responseGeneratedHaskell :: !String
       }
   | SpliceError
-      { responseRequestId :: !String
-      , responseMessage :: !String
+      { -- | Correlation id copied from the request when available.
+        responseRequestId :: !String
+      , -- | Human-readable worker/protocol error.
+        responseMessage :: !String
       }
   deriving (Eq, Show)
 
@@ -177,5 +193,6 @@ encodeResponseLine = encodeJsonLine
 decodeResponseLine :: BL.ByteString -> Either String SpliceResponse
 decodeResponseLine = eitherDecode
 
+-- | Encode a JSON value and append the newline frame delimiter.
 encodeJsonLine :: ToJSON a => a -> BL.ByteString
 encodeJsonLine value = encode value <> "\n"

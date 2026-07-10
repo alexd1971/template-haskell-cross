@@ -41,7 +41,7 @@ import GHC.Unit.Module (moduleName, moduleNameString)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import System.Exit (ExitCode (..))
 import System.Process (proc, readCreateProcessWithExitCode)
-import THCross.ParseFragment (parseExpressionFragment)
+import THCross.ParseFragment (parseDeclarationFragments, parseExpressionFragment)
 import THCross.Protocol
   ( SourceSpan (..)
   , SpliceKind (..)
@@ -79,7 +79,8 @@ installHook opts hscEnv =
 -- In normal mode this delegates to 'defaultRunMeta', preserving stock GHC TH
 -- behavior. In dummy expression mode, only 'MetaE' requests are replaced with
 -- @42@. In worker mode, expression splices are delegated to the configured
--- external worker and all other request kinds still delegate to GHC.
+-- external worker. Declaration splices are also delegated so declaration-group
+-- ordering can be preserved for later expression splices.
 loggingMetaHook :: PluginMode -> MetaHook TcM
 loggingMetaHook mode request spliceExpr = do
   tcg <- getGblEnv
@@ -89,7 +90,7 @@ loggingMetaHook mode request spliceExpr = do
       sourceLoc = getLocA spliceExpr
       spanText = showSDocUnsafe (ppr (getLocA spliceExpr))
       exprText = showSDocUnsafe (ppr spliceExpr)
-  liftIO $ putStrLn "THCross.Plugin intercepted Template Haskell splice"
+  liftIO $ putStrLn "th-cross: intercepted Template Haskell splice"
   liftIO $ putStrLn ("module: " <> modText)
   liftIO $ putStrLn ("kind: " <> kindText)
   liftIO $ putStrLn ("location: " <> spanText)
@@ -101,20 +102,18 @@ loggingMetaHook mode request spliceExpr = do
           generated <- parseExpressionFragment "42"
           pure (wrap generated)
       | WorkerMode workerPath <- mode -> do
-          let workerRequest =
-                mkSpliceRequest modText kind sourceLoc spanText exprText
-          liftIO $ putStrLn ("worker: " <> workerPath)
-          generatedText <- callWorker workerPath workerRequest >>= \case
-            Left err -> do
-              liftIO $ putStrLn ("worker-error: " <> err)
-              fail err
-            Right text -> pure text
+          generatedText <- requestWorker workerPath modText kind sourceLoc spanText exprText
           generated <- parseExpressionFragment generatedText
+          pure (wrap generated)
+    MetaD wrap
+      | WorkerMode workerPath <- mode -> do
+          generatedText <- requestWorker workerPath modText kind sourceLoc spanText exprText
+          generated <- parseDeclarationFragments generatedText
           pure (wrap generated)
     _
       | WorkerMode{} <- mode -> do
           let err =
-                "THCross worker mode currently supports only expression splices; got "
+                "worker mode currently supports only expression and declaration splices; got "
                   <> kindText
           liftIO $ putStrLn ("unsupported-splice-kind: " <> err)
           fail err
@@ -141,6 +140,11 @@ pluginMode opts
   | Just workerPath <- findWorkerPath opts = WorkerMode workerPath
   | otherwise = PassthroughMode
 
+-- | Extract the external worker executable path from plugin options.
+--
+-- The expected option shape is @worker=/absolute/or/relative/path@. The plugin
+-- intentionally does not resolve the path here; process creation reports any
+-- missing executable error at splice evaluation time.
 findWorkerPath :: [CommandLineOption] -> Maybe FilePath
 findWorkerPath = listToMaybe . mapMaybe (stripPrefix "worker=")
 
@@ -153,6 +157,12 @@ metaRequestKind = \case
   MetaD{} -> DeclarationSplice
   MetaAW{} -> AnnotationWrapperSplice
 
+-- | Build the JSON-lines protocol request sent to the host worker.
+--
+-- The request contains enough diagnostic and matching information for the
+-- worker to load the source module, capture the corresponding splice, and return
+-- textual generated Haskell. Task 11 will replace this provisional request id
+-- with a stable splice key.
 mkSpliceRequest ::
   String ->
   SpliceKind ->
@@ -172,6 +182,12 @@ mkSpliceRequest modText kind sourceLoc spanText exprText =
         , requestCrossGhcVersion = cProjectVersion
         }
 
+-- | Convert GHC's source span into protocol data.
+--
+-- Real spans carry both the source file path and 1-based line/column bounds.
+-- Unhelpful spans cannot identify a real source location, so the prototype uses
+-- a synthetic placeholder that keeps the protocol total but will not match a
+-- real worker capture.
 protocolSourceSpan :: SrcSpan -> (FilePath, SourceSpan)
 protocolSourceSpan = \case
   RealSrcSpan realSpan _ ->
@@ -186,6 +202,35 @@ protocolSourceSpan = \case
   UnhelpfulSpan _ ->
     ("<unknown>", SourceSpan 1 1 1 1)
 
+-- | Ask the configured host worker to evaluate one splice.
+--
+-- This function is shared by expression and declaration splices. The caller is
+-- responsible for parsing the returned textual Haskell into the result shape
+-- required by the specific 'MetaRequest' constructor.
+requestWorker ::
+  FilePath ->
+  String ->
+  SpliceKind ->
+  SrcSpan ->
+  String ->
+  String ->
+  TcM String
+requestWorker workerPath modText kind sourceLoc spanText exprText = do
+  let workerRequest =
+        mkSpliceRequest modText kind sourceLoc spanText exprText
+  liftIO $ putStrLn ("worker: " <> workerPath)
+  callWorker workerPath workerRequest >>= \case
+    Left err -> do
+      liftIO $ putStrLn ("worker-error: " <> err)
+      fail err
+    Right text ->
+      pure text
+
+-- | Run one JSON-lines request/response exchange with the worker executable.
+--
+-- The current prototype starts a fresh worker process for each splice. Persistent
+-- worker mode in Task 12 should replace this with a long-lived connection while
+-- preserving the same protocol-level validation.
 callWorker :: FilePath -> SpliceRequest -> TcM (Either String String)
 callWorker workerPath request = liftIO $ do
   let input = BL.unpack (encodeRequestLine request)
@@ -201,6 +246,10 @@ callWorker workerPath request = liftIO $ do
           Right response ->
             handleWorkerResponse (requestId request) response
 
+-- | Validate a worker response and extract the generated Haskell fragment.
+--
+-- A request id mismatch is treated as a hard protocol error because accepting a
+-- fragment for the wrong splice would graft code into the wrong source location.
 handleWorkerResponse :: String -> SpliceResponse -> Either String String
 handleWorkerResponse expectedRequestId response
   | responseRequestId response /= expectedRequestId =

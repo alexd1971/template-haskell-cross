@@ -34,7 +34,9 @@ declaration
 annotation-wrapper
 ```
 
-The MVP only supports `expression`.
+The current prototype supports `expression` and `declaration`. Type, pattern,
+and annotation-wrapper splices are protocol values reserved for later
+implementation.
 
 ## Request
 
