@@ -11,6 +11,7 @@ executable th-host-worker
   build-depends:
       base >= 4.19 && < 4.20
     , bytestring
+    , directory
     , filepath
     , ghc == 9.8.4
     , process

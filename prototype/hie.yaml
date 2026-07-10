@@ -3,5 +3,8 @@ cradle:
     - path: "th-cross-plugin/src"
       component: "lib:th-cross-plugin"
 
+    - path: "th-cross-plugin/test"
+      component: "th-cross-plugin:test:integration"
+
     - path: "th-host-worker/app/Main.hs"
       component: "th-host-worker:exe:th-host-worker"

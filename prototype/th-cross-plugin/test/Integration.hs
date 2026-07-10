@@ -2,7 +2,8 @@ module Main (main) where
 
 import Control.Monad (forM_)
 import System.Directory
-  ( doesFileExist
+  ( createDirectoryIfMissing
+  , doesFileExist
   , getCurrentDirectory
   )
 import System.Exit (ExitCode (..), exitFailure)
@@ -25,6 +26,7 @@ data TestCase = TestCase
 main :: IO ()
 main = do
   projectRoot <- findProjectRoot
+  cabalBuild projectRoot "th-host-worker"
   workerPath <- cabalListBin projectRoot "th-host-worker"
   let testCases =
         [ TestCase
@@ -62,6 +64,12 @@ workerPluginOptions workerPath =
 runCase :: FilePath -> TestCase -> IO ()
 runCase projectRoot testCase = do
   putStrLn ("integration: " <> testName testCase)
+  let testBuildDir =
+        projectRoot
+          </> "dist-newstyle"
+          </> "th-cross-integration"
+          </> sanitizePathSegment (testName testCase)
+  createDirectoryIfMissing True testBuildDir
   let args =
         [ "exec"
         , "--"
@@ -72,6 +80,14 @@ runCase projectRoot testCase = do
         , "-package"
         , "th-cross-plugin"
         , "-ith-cross-plugin/test"
+        , "-outputdir"
+        , testBuildDir
+        , "-hidir"
+        , testBuildDir
+        , "-odir"
+        , testBuildDir
+        , "-stubdir"
+        , testBuildDir
         ]
           <> testPluginOptions testCase
           <> [testModulePath testCase]
@@ -82,6 +98,23 @@ runCase projectRoot testCase = do
     ExitFailure code -> do
       putStrLn ("integration test failed: " <> testName testCase)
       putStrLn ("exit code: " <> show code)
+      putStrLn "stdout:"
+      putStr out
+      putStrLn "stderr:"
+      putStr err
+      exitFailure
+
+cabalBuild :: FilePath -> String -> IO ()
+cabalBuild projectRoot target = do
+  (exitCode, out, err) <-
+    readCreateProcessWithExitCode
+      (inProject projectRoot (proc "cabal" ["build", target]))
+      ""
+  case exitCode of
+    ExitSuccess ->
+      pure ()
+    ExitFailure code -> do
+      putStrLn ("cabal build failed with exit code " <> show code)
       putStrLn "stdout:"
       putStr out
       putStrLn "stderr:"
@@ -130,3 +163,14 @@ inProject projectRoot createProcess =
 trimTrailingNewline :: String -> String
 trimTrailingNewline =
   reverse . dropWhile (`elem` ['\n', '\r']) . reverse
+
+sanitizePathSegment :: String -> FilePath
+sanitizePathSegment =
+  map replace
+  where
+    replace c
+      | c `elem` allowed = c
+      | otherwise = '-'
+
+    allowed =
+      ['a' .. 'z'] <> ['A' .. 'Z'] <> ['0' .. '9'] <> "-_."

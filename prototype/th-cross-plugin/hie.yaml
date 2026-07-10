@@ -2,3 +2,6 @@ cradle:
   cabal:
     - path: "src"
       component: "lib:th-cross-plugin"
+
+    - path: "test"
+      component: "th-cross-plugin:test:integration"

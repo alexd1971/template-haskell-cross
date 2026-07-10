@@ -12,6 +12,7 @@ import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (find)
 import Data.Maybe (fromMaybe)
+import System.Directory (createDirectoryIfMissing)
 import GHC
   ( Ghc
   , GhcMonad (getSession)
@@ -26,7 +27,14 @@ import GHC
   , setTargets
   )
 import GHC.Driver.Env.Types (HscEnv (..))
-import GHC.Driver.Session (GeneralFlag (Opt_ForceRecomp), gopt_set, importPaths)
+import GHC.Driver.Session
+  ( GeneralFlag (Opt_ForceRecomp)
+  , gopt_set
+  , hiDir
+  , importPaths
+  , objectDir
+  , stubDir
+  )
 import GHC.Driver.Hooks (Hooks (..))
 import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr)
 import GHC.Parser.Annotation (getLocA)
@@ -55,7 +63,7 @@ import GHC.Utils.Outputable
   , sdocSuppressUniques
   , showSDocUnsafe
   )
-import System.FilePath (takeDirectory)
+import System.FilePath ((</>), takeDirectory)
 import System.IO
   ( BufferMode (LineBuffering)
   , hSetBuffering
@@ -149,12 +157,17 @@ evaluateModuleSpliceText :: SpliceRequest -> IO (Either String String)
 evaluateModuleSpliceText request = do
   capturesRef <- newIORef []
   ghcLibDir <- getGhcLibDir
+  createDirectoryIfMissing True hostWorkerBuildDir
   result <- runGhc (Just ghcLibDir) $ do
     dflags <- getSessionDynFlags
     let sourceDir = takeDirectory (requestSourceFile request)
         dflagsWithSourceDir =
           (gopt_set dflags Opt_ForceRecomp)
-            {importPaths = sourceDir : importPaths dflags}
+            { importPaths = sourceDir : importPaths dflags
+            , objectDir = Just hostWorkerBuildDir
+            , hiDir = Just hostWorkerBuildDir
+            , stubDir = Just hostWorkerBuildDir
+            }
     setSessionDynFlags dflagsWithSourceDir
     installCaptureHook capturesRef
     target <- guessTarget (requestSourceFile request) Nothing Nothing
@@ -166,6 +179,15 @@ evaluateModuleSpliceText request = do
     Succeeded -> do
       captures <- readIORef capturesRef
       pure (selectCapturedSplice request captures)
+
+-- | Directory for object/interface/stub files produced by host-side GHC loads.
+--
+-- Without this, native GHC writes @.o@ and @.hi@ files next to the source module
+-- being loaded. Keeping the artifacts under @dist-newstyle@ avoids polluting the
+-- user's source tree while preserving normal compilation behavior in the worker.
+hostWorkerBuildDir :: FilePath
+hostWorkerBuildDir =
+  "dist-newstyle" </> "th-cross-worker"
 
 -- | Locate the native GHC library directory used to initialize 'runGhc'.
 --
