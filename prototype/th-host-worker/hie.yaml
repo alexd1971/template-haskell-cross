@@ -1,4 +1,4 @@
 cradle:
   cabal:
-    - path: "app/Main.hs"
+    - path: "app"
       component: "th-host-worker:exe:th-host-worker"

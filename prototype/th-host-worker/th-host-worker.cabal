@@ -5,6 +5,8 @@ build-type: Simple
 
 executable th-host-worker
   main-is: Main.hs
+  other-modules:
+      Worker.Evaluate
   hs-source-dirs:
       app
   default-language: Haskell2010

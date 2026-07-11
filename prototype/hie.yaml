@@ -6,5 +6,5 @@ cradle:
     - path: "th-cross-plugin/test"
       component: "th-cross-plugin:test:integration"
 
-    - path: "th-host-worker/app/Main.hs"
+    - path: "th-host-worker/app"
       component: "th-host-worker:exe:th-host-worker"
