@@ -49,7 +49,13 @@ import THCross.Protocol
   , SpliceResponse (..)
   , decodeResponseLine
   , encodeRequestLine
+  , sourceSpanKeyText
   , spliceKindText
+  )
+import THCross.SpliceKey
+  ( SpliceKey
+  , mkSpliceKey
+  , unSpliceKey
   )
 
 -- | Entry point discovered by GHC when @-fplugin=THCross.Plugin@ is used.
@@ -84,15 +90,18 @@ installHook opts hscEnv =
 loggingMetaHook :: PluginMode -> MetaHook TcM
 loggingMetaHook mode request spliceExpr = do
   tcg <- getGblEnv
-  let modText = moduleNameString (moduleName (tcg_mod tcg))
+  let spliceModuleName = moduleNameString (moduleName (tcg_mod tcg))
       kind = metaRequestKind request
       kindText = spliceKindText kind
       sourceLoc = getLocA spliceExpr
       spanText = showSDocUnsafe (ppr (getLocA spliceExpr))
       exprText = showSDocUnsafe (ppr spliceExpr)
+      (_, protocolSpan) = protocolSourceSpan sourceLoc
+      spliceKey = mkSpliceKey spliceModuleName kindText (sourceSpanKeyText protocolSpan)
   liftIO $ putStrLn "th-cross: intercepted Template Haskell splice"
-  liftIO $ putStrLn ("module: " <> modText)
+  liftIO $ putStrLn ("module: " <> spliceModuleName)
   liftIO $ putStrLn ("kind: " <> kindText)
+  liftIO $ putStrLn ("splice-key: " <> unSpliceKey spliceKey)
   liftIO $ putStrLn ("location: " <> spanText)
   liftIO $ putStrLn ("expression: " <> exprText)
   case request of
@@ -102,12 +111,12 @@ loggingMetaHook mode request spliceExpr = do
           generated <- parseExpressionFragment "42"
           pure (wrap generated)
       | WorkerMode workerPath <- mode -> do
-          generatedText <- requestWorker workerPath modText kind sourceLoc spanText exprText
+          generatedText <- requestWorker workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText
           generated <- parseExpressionFragment generatedText
           pure (wrap generated)
     MetaD wrap
       | WorkerMode workerPath <- mode -> do
-          generatedText <- requestWorker workerPath modText kind sourceLoc spanText exprText
+          generatedText <- requestWorker workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText
           generated <- parseDeclarationFragments generatedText
           pure (wrap generated)
     _
@@ -161,23 +170,24 @@ metaRequestKind = \case
 --
 -- The request contains enough diagnostic and matching information for the
 -- worker to load the source module, capture the corresponding splice, and return
--- textual generated Haskell. Task 11 will replace this provisional request id
--- with a stable splice key.
+-- textual generated Haskell.
 mkSpliceRequest ::
   String ->
   SpliceKind ->
   SrcSpan ->
   String ->
+  SpliceKey ->
   String ->
   SpliceRequest
-mkSpliceRequest modText kind sourceLoc spanText exprText =
+mkSpliceRequest spliceModuleName kind sourceLoc spanText spliceKey exprText =
   let (sourceFile, protocolSpan) = protocolSourceSpan sourceLoc
    in SpliceRequest
-        { requestId = modText <> ":" <> spliceKindText kind <> ":" <> spanText
-        , requestModuleName = modText
+        { requestId = spliceModuleName <> ":" <> spliceKindText kind <> ":" <> spanText
+        , requestModuleName = spliceModuleName
         , requestSourceFile = sourceFile
         , requestSpliceKind = kind
         , requestSourceSpan = protocolSpan
+        , requestSpliceKey = spliceKey
         , requestSpliceExpression = exprText
         , requestCrossGhcVersion = cProjectVersion
         }
@@ -213,11 +223,12 @@ requestWorker ::
   SpliceKind ->
   SrcSpan ->
   String ->
+  SpliceKey ->
   String ->
   TcM String
-requestWorker workerPath modText kind sourceLoc spanText exprText = do
+requestWorker workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText = do
   let workerRequest =
-        mkSpliceRequest modText kind sourceLoc spanText exprText
+        mkSpliceRequest spliceModuleName kind sourceLoc spanText spliceKey exprText
   liftIO $ putStrLn ("worker: " <> workerPath)
   callWorker workerPath workerRequest >>= \case
     Left err -> do

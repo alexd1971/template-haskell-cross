@@ -52,6 +52,7 @@ implementation.
     "endLine": 42,
     "endColumn": 24
   },
+  "spliceKey": "2bfc6d6f9f7d6abdfb5dbb5c8ab8d3d1",
   "spliceExpression": "genFoo 123",
   "crossGhcVersion": "9.8.4"
 }
@@ -64,6 +65,8 @@ Fields:
 - `sourceFile`: source path reported by the cross-side compiler.
 - `spliceKind`: splice category.
 - `sourceSpan`: 1-based source span of the splice expression.
+- `spliceKey`: opaque stable splice identity used as the worker-side matcher.
+  It is derived from module name, splice kind, and source span.
 - `spliceExpression`: pretty-printed splice expression.
 - `crossGhcVersion`: GHC version of the cross compiler process.
 

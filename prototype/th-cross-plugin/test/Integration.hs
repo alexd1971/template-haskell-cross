@@ -52,6 +52,11 @@ main = do
             , testModulePath = "th-cross-plugin/test/DeclOrder.hs"
             , testPluginOptions = workerPluginOptions workerPath
             }
+        , TestCase
+            { testName = "worker duplicate expression splices"
+            , testModulePath = "th-cross-plugin/test/DuplicateSplices.hs"
+            , testPluginOptions = workerPluginOptions workerPath
+            }
         ]
   forM_ testCases (runCase projectRoot)
 

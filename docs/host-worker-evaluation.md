@@ -52,7 +52,13 @@ run normal Template Haskell locally on the build host.
 
 ## Matching
 
-The MVP matches a captured splice by:
+The worker matches a captured splice by:
+
+```text
+spliceKey
+```
+
+The key is derived from:
 
 ```text
 module name
@@ -60,9 +66,8 @@ splice kind
 source span
 ```
 
-The request still carries the pretty-printed splice expression, but the current
-selector does not require expression text equality. Task 11 should replace this
-with a stable splice key.
+The worker must load the same source view as the cross-side compiler. A key
+mismatch means the worker did not capture the requested source occurrence.
 
 ## Supported Case
 

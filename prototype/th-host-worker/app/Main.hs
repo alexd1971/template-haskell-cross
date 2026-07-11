@@ -61,7 +61,6 @@ import GHC.Utils.Outputable
   , ppr
   , renderWithContext
   , sdocSuppressUniques
-  , showSDocUnsafe
   )
 import System.FilePath ((</>), takeDirectory)
 import System.IO
@@ -79,6 +78,12 @@ import THCross.Protocol
   , SpliceResponse (..)
   , decodeRequestLine
   , encodeResponseLine
+  , sourceSpanKeyText
+  , spliceKindText
+  )
+import THCross.SpliceKey
+  ( SpliceKey
+  , mkSpliceKey
   )
 
 -- | Start the line-oriented worker protocol.
@@ -215,7 +220,10 @@ installCaptureHook capturesRef = do
 -- 'defaultRunMeta' first. That produces the real @GhcPs@ expansion in the native
 -- session. The hook then pretty-prints the expansion, stores it in 'capturesRef',
 -- and returns the original expansion back to GHC so module loading continues.
-captureMetaHook :: IORef [CapturedSplice] -> Maybe (MetaHook TcM) -> MetaHook TcM
+captureMetaHook ::
+  IORef [CapturedSplice] ->
+  Maybe (MetaHook TcM) ->
+  MetaHook TcM
 captureMetaHook capturesRef previousRunMeta request spliceExpr =
   case request of
     MetaE wrap -> do
@@ -238,34 +246,31 @@ captureMetaHook capturesRef previousRunMeta request spliceExpr =
 -- | One splice expansion observed while native GHC loaded the requested module.
 --
 -- The generated Haskell text is the payload returned to the cross-side plugin.
--- The remaining fields are the current MVP matching key. Task 11 should replace
--- source-span matching with a stable splice identity.
+-- The splice key is the match field.
 data CapturedSplice = CapturedSplice
-  { capturedModuleName :: !String
-  , capturedSpliceKind :: !SpliceKind
-  , capturedSourceSpan :: !SourceSpan
-  , capturedExpression :: !String
+  { capturedSpliceKey :: !SpliceKey
   , capturedGeneratedHaskell :: !String
   }
   deriving (Eq, Show)
 
--- | Attach module, kind, source span, and original expression text to a captured
--- expansion.
+-- | Attach the source-occurrence splice key to a captured expansion.
 --
 -- This runs in 'TcM' inside the host compiler, so it can read the current
 -- 'TcGblEnv' to discover which module is being compiled when the splice fires.
-mkCapturedSplice :: SpliceKind -> LHsExpr GhcTc -> String -> TcM CapturedSplice
+mkCapturedSplice ::
+  SpliceKind ->
+  LHsExpr GhcTc ->
+  String ->
+  TcM CapturedSplice
 mkCapturedSplice spliceKind spliceExpr generatedText = do
   tcg <- getGblEnv
-  let modText = moduleNameString (moduleName (tcg_mod tcg))
+  let spliceModuleName = moduleNameString (moduleName (tcg_mod tcg))
       sourceSpan = protocolSourceSpan (getLocA spliceExpr)
-      exprText = showSDocUnsafe (ppr spliceExpr)
+      kindText = spliceKindText spliceKind
+      spliceKey = mkSpliceKey spliceModuleName kindText (sourceSpanKeyText sourceSpan)
   pure
     CapturedSplice
-      { capturedModuleName = modText
-      , capturedSpliceKind = spliceKind
-      , capturedSourceSpan = sourceSpan
-      , capturedExpression = exprText
+      { capturedSpliceKey = spliceKey
       , capturedGeneratedHaskell = generatedText
       }
 
@@ -304,27 +309,26 @@ protocolSourceSpan = \case
 
 -- | Find the host-side expansion corresponding to the cross-side request.
 --
--- Loading a module can execute several splices. The worker currently selects by
--- module name, splice kind, and source span, then returns only the requested
--- generated fragment.
+-- Loading a module can execute several splices. The worker selects by the opaque
+-- splice key derived from module name, splice kind, and source span.
 selectCapturedSplice :: SpliceRequest -> [CapturedSplice] -> Either String String
 selectCapturedSplice request captures =
-  case find (matchesRequest request) captures of
+  case find (matchesRequestSpliceKey request) captures of
     Just capture ->
       Right (capturedGeneratedHaskell capture)
     Nothing ->
       Left $
-        "host GHC did not capture requested splice; captured "
+        "host GHC did not capture requested splice; request key "
+          <> show (requestSpliceKey request)
+          <> "; captured "
           <> show (length captures)
           <> " splice(s): "
           <> show captures
 
--- | MVP splice matcher shared by expression and declaration splices.
-matchesRequest :: SpliceRequest -> CapturedSplice -> Bool
-matchesRequest request capture =
-  capturedModuleName capture == requestModuleName request
-    && capturedSpliceKind capture == requestSpliceKind request
-    && capturedSourceSpan capture == requestSourceSpan request
+-- | Primary splice matcher shared by expression and declaration splices.
+matchesRequestSpliceKey :: SpliceRequest -> CapturedSplice -> Bool
+matchesRequestSpliceKey request capture =
+  capturedSpliceKey capture == requestSpliceKey request
 
 -- | Remove trailing newlines from command output such as @ghc --print-libdir@.
 trimTrailingNewline :: String -> String

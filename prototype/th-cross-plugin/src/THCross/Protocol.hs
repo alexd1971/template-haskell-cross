@@ -14,6 +14,7 @@ module THCross.Protocol
   , decodeResponseLine
   , encodeRequestLine
   , encodeResponseLine
+  , sourceSpanKeyText
   , spliceKindText
   ) where
 
@@ -28,6 +29,7 @@ import Data.Aeson
   , (.=)
   )
 import qualified Data.ByteString.Lazy as BL
+import THCross.SpliceKey (SpliceKey)
 
 -- | 1-based source span for the splice as seen by the cross GHC process.
 data SourceSpan = SourceSpan
@@ -59,6 +61,17 @@ instance FromJSON SourceSpan where
         <*> obj .: "startColumn"
         <*> obj .: "endLine"
         <*> obj .: "endColumn"
+
+-- | Stable textual representation used as part of 'SpliceKey' payload.
+sourceSpanKeyText :: SourceSpan -> String
+sourceSpanKeyText spanInfo =
+  show (sourceSpanStartLine spanInfo)
+    <> ":"
+    <> show (sourceSpanStartColumn spanInfo)
+    <> "-"
+    <> show (sourceSpanEndLine spanInfo)
+    <> ":"
+    <> show (sourceSpanEndColumn spanInfo)
 
 -- | Template Haskell splice category.
 data SpliceKind
@@ -101,10 +114,11 @@ data SpliceRequest = SpliceRequest
     requestSourceFile :: !FilePath
   , -- | Splice result shape expected by the cross-side 'runMetaHook'.
     requestSpliceKind :: !SpliceKind
-  , -- | Source span used by the MVP worker to select the captured splice.
+  , -- | Source span used for diagnostics and as part of the splice key payload.
     requestSourceSpan :: !SourceSpan
-  , -- | Pretty-printed original splice expression for diagnostics and future
-    -- stable-key matching.
+  , -- | Opaque source occurrence identity used for worker-side matching.
+    requestSpliceKey :: !SpliceKey
+  , -- | Pretty-printed original splice expression for diagnostics.
     requestSpliceExpression :: !String
   , -- | Version of the cross-side compiler that produced this request.
     requestCrossGhcVersion :: !String
@@ -119,6 +133,7 @@ instance ToJSON SpliceRequest where
       , "sourceFile" .= requestSourceFile request
       , "spliceKind" .= requestSpliceKind request
       , "sourceSpan" .= requestSourceSpan request
+      , "spliceKey" .= requestSpliceKey request
       , "spliceExpression" .= requestSpliceExpression request
       , "crossGhcVersion" .= requestCrossGhcVersion request
       ]
@@ -132,6 +147,7 @@ instance FromJSON SpliceRequest where
         <*> obj .: "sourceFile"
         <*> obj .: "spliceKind"
         <*> obj .: "sourceSpan"
+        <*> obj .: "spliceKey"
         <*> obj .: "spliceExpression"
         <*> obj .: "crossGhcVersion"
 
