@@ -11,6 +11,12 @@
 -- resulting @GhcPs@ AST.
 module THCross.Plugin (plugin) where
 
+import Control.Concurrent.MVar
+  ( MVar
+  , modifyMVar
+  , newMVar
+  )
+import Control.Exception (IOException, try)
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.List (stripPrefix)
 import Data.Maybe (listToMaybe, mapMaybe)
@@ -39,8 +45,20 @@ import GHC.Types.SrcLoc
   )
 import GHC.Unit.Module (moduleName, moduleNameString)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
-import System.Exit (ExitCode (..))
-import System.Process (proc, readCreateProcessWithExitCode)
+import System.IO
+  ( Handle
+  , hFlush
+  , hGetLine
+  , hSetBuffering
+  , BufferMode (LineBuffering)
+  )
+import System.Process
+  ( CreateProcess (..)
+  , ProcessHandle
+  , StdStream (..)
+  , createProcess
+  , proc
+  )
 import THCross.ParseFragment (parseDeclarationFragments, parseExpressionFragment)
 import THCross.Protocol
   ( SourceSpan (..)
@@ -75,10 +93,11 @@ plugin =
 -- 'hsc_hooks', so all subsequent TH splice evaluation in this session goes
 -- through 'loggingMetaHook'.
 installHook :: [CommandLineOption] -> HscEnv -> IO HscEnv
-installHook opts hscEnv =
+installHook opts hscEnv = do
+  workerState <- newMVar Nothing
   let hooks0 = hsc_hooks hscEnv
-      hooks1 = hooks0 {runMetaHook = Just (loggingMetaHook (pluginMode opts))}
-   in pure hscEnv {hsc_hooks = hooks1}
+      hooks1 = hooks0 {runMetaHook = Just (loggingMetaHook workerState (pluginMode opts))}
+  pure hscEnv {hsc_hooks = hooks1}
 
 -- | Log metadata for every intercepted TH request and then evaluate it.
 --
@@ -87,8 +106,8 @@ installHook opts hscEnv =
 -- @42@. In worker mode, expression splices are delegated to the configured
 -- external worker. Declaration splices are also delegated so declaration-group
 -- ordering can be preserved for later expression splices.
-loggingMetaHook :: PluginMode -> MetaHook TcM
-loggingMetaHook mode request spliceExpr = do
+loggingMetaHook :: WorkerState -> PluginMode -> MetaHook TcM
+loggingMetaHook workerState mode request spliceExpr = do
   tcg <- getGblEnv
   let spliceModuleName = moduleNameString (moduleName (tcg_mod tcg))
       kind = metaRequestKind request
@@ -111,12 +130,12 @@ loggingMetaHook mode request spliceExpr = do
           generated <- parseExpressionFragment "42"
           pure (wrap generated)
       | WorkerMode workerPath <- mode -> do
-          generatedText <- requestWorker workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText
+          generatedText <- requestWorker workerState workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText
           generated <- parseExpressionFragment generatedText
           pure (wrap generated)
     MetaD wrap
       | WorkerMode workerPath <- mode -> do
-          generatedText <- requestWorker workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText
+          generatedText <- requestWorker workerState workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText
           generated <- parseDeclarationFragments generatedText
           pure (wrap generated)
     _
@@ -134,6 +153,16 @@ data PluginMode
   | DummyExprMode
   | WorkerMode FilePath
   deriving (Eq, Show)
+
+-- | Persistent worker process state for one GHC session.
+type WorkerState = MVar (Maybe WorkerHandle)
+
+-- | Handles for the long-lived JSON-lines worker process.
+data WorkerHandle = WorkerHandle
+  { workerInput :: !Handle
+  , workerOutput :: !Handle
+  , workerProcess :: !ProcessHandle
+  }
 
 -- | Select plugin behavior from command-line options.
 --
@@ -218,6 +247,7 @@ protocolSourceSpan = \case
 -- responsible for parsing the returned textual Haskell into the result shape
 -- required by the specific 'MetaRequest' constructor.
 requestWorker ::
+  WorkerState ->
   FilePath ->
   String ->
   SpliceKind ->
@@ -226,11 +256,11 @@ requestWorker ::
   SpliceKey ->
   String ->
   TcM String
-requestWorker workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText = do
+requestWorker workerState workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText = do
   let workerRequest =
         mkSpliceRequest spliceModuleName kind sourceLoc spanText spliceKey exprText
   liftIO $ putStrLn ("worker: " <> workerPath)
-  callWorker workerPath workerRequest >>= \case
+  callWorker workerState workerPath workerRequest >>= \case
     Left err -> do
       liftIO $ putStrLn ("worker-error: " <> err)
       fail err
@@ -239,18 +269,54 @@ requestWorker workerPath spliceModuleName kind sourceLoc spanText spliceKey expr
 
 -- | Run one JSON-lines request/response exchange with the worker executable.
 --
--- The current prototype starts a fresh worker process for each splice. Persistent
--- worker mode in Task 12 should replace this with a long-lived connection while
--- preserving the same protocol-level validation.
-callWorker :: FilePath -> SpliceRequest -> TcM (Either String String)
-callWorker workerPath request = liftIO $ do
-  let input = BL.unpack (encodeRequestLine request)
-  (exitCode, out, err) <- readCreateProcessWithExitCode (proc workerPath []) input
+-- The worker process is started lazily on the first splice and then reused for
+-- later splices in the same GHC session.
+callWorker :: WorkerState -> FilePath -> SpliceRequest -> TcM (Either String String)
+callWorker workerState workerPath request =
+  liftIO $
+    modifyMVar workerState $ \maybeWorker -> do
+      worker <-
+        case maybeWorker of
+          Just existingWorker -> do
+            putStrLn "th-cross: reusing worker"
+            pure existingWorker
+          Nothing -> do
+            putStrLn ("th-cross: started worker " <> workerPath)
+            startWorker workerPath
+      result <- sendWorkerRequest worker request
+      pure (Just worker, result)
+
+-- | Start the JSON-lines worker and keep its stdin/stdout open.
+startWorker :: FilePath -> IO WorkerHandle
+startWorker workerPath = do
+  (Just workerIn, Just workerOut, Nothing, workerProcessHandle) <-
+    createProcess
+      (proc workerPath [])
+        { std_in = CreatePipe
+        , std_out = CreatePipe
+        , std_err = Inherit
+        }
+  hSetBuffering workerIn LineBuffering
+  hSetBuffering workerOut LineBuffering
+  pure
+    WorkerHandle
+      { workerInput = workerIn
+      , workerOutput = workerOut
+      , workerProcess = workerProcessHandle
+      }
+
+-- | Send one request over an already running worker process and read its response.
+sendWorkerRequest :: WorkerHandle -> SpliceRequest -> IO (Either String String)
+sendWorkerRequest worker request = do
+  output <- try $ do
+    BL.hPutStr (workerInput worker) (encodeRequestLine request)
+    hFlush (workerInput worker)
+    hGetLine (workerOutput worker)
   pure $
-    case exitCode of
-      ExitFailure code ->
-        Left ("TH host worker failed with exit code " <> show code <> ": " <> err)
-      ExitSuccess ->
+    case output of
+      Left err ->
+        Left ("TH host worker communication failed: " <> show (err :: IOException))
+      Right out ->
         case decodeResponseLine (BL.pack out) of
           Left decodeErr ->
             Left ("TH host worker returned invalid JSON response: " <> decodeErr)

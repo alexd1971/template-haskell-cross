@@ -1,6 +1,7 @@
 module Main (main) where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, when)
+import Data.List (stripPrefix)
 import System.Directory
   ( createDirectoryIfMissing
   , doesFileExist
@@ -21,6 +22,7 @@ data TestCase = TestCase
   { testName :: !String
   , testModulePath :: !FilePath
   , testPluginOptions :: ![String]
+  , testStdoutOccurrences :: ![(String, Int)]
   }
 
 main :: IO ()
@@ -29,33 +31,51 @@ main = do
   cabalBuild projectRoot "th-host-worker"
   workerPath <- cabalListBin projectRoot "th-host-worker"
   let testCases =
-        [ TestCase
+        [ -- Proves that the plugin can replace an expression splice locally
+          -- without executing the original Template Haskell expression.
+          TestCase
             { testName = "dummy expression replacement"
             , testModulePath = "th-cross-plugin/test/DummyExpr.hs"
             , testPluginOptions =
                 [ "-fplugin=THCross.Plugin"
                 , "-fplugin-opt=THCross.Plugin:dummy-expr"
                 ]
+            , testStdoutOccurrences = []
             }
+          -- Exercises the first worker-backed expression splice path:
+          -- plugin request -> worker evaluation -> textual fragment -> parser.
         , TestCase
             { testName = "worker expression splice"
             , testModulePath = "th-cross-plugin/test/Example.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences = []
             }
+          -- Verifies module-aware host evaluation: the worker loads the source
+          -- module before evaluating the splice, so reify can see local decls.
         , TestCase
             { testName = "worker module-aware reify"
             , testModulePath = "th-cross-plugin/test/ReifyExpr.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences = []
             }
+          -- Keeps declaration splice ordering under test. The declaration
+          -- splice is evaluated by the worker before the later expression splice.
         , TestCase
             { testName = "worker declaration ordering"
             , testModulePath = "th-cross-plugin/test/DeclOrder.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences = []
             }
+          -- Confirms that two expression splices in one compiler session use
+          -- one long-lived worker process, not two processes.
         , TestCase
-            { testName = "worker duplicate expression splices"
+            { testName = "persistent worker reuse"
             , testModulePath = "th-cross-plugin/test/DuplicateSplices.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences =
+                [ ("th-cross: started worker", 1)
+                , ("th-cross: reusing worker", 1)
+                ]
             }
         ]
   forM_ testCases (runCase projectRoot)
@@ -99,7 +119,7 @@ runCase projectRoot testCase = do
   (exitCode, out, err) <- readCreateProcessWithExitCode (inProject projectRoot (proc "cabal" args)) ""
   case exitCode of
     ExitSuccess ->
-      pure ()
+      checkStdoutOccurrences testCase out
     ExitFailure code -> do
       putStrLn ("integration test failed: " <> testName testCase)
       putStrLn ("exit code: " <> show code)
@@ -108,6 +128,38 @@ runCase projectRoot testCase = do
       putStrLn "stderr:"
       putStr err
       exitFailure
+
+checkStdoutOccurrences :: TestCase -> String -> IO ()
+checkStdoutOccurrences testCase out =
+  forM_ (testStdoutOccurrences testCase) $ \(needle, expected) -> do
+    let actual = countOccurrences needle out
+    when (actual /= expected) $ do
+      putStrLn ("integration test failed: " <> testName testCase)
+      putStrLn
+        ( "expected stdout occurrence count for "
+            <> show needle
+            <> ": "
+            <> show expected
+            <> ", got "
+            <> show actual
+        )
+      putStrLn "stdout:"
+      putStr out
+      exitFailure
+
+countOccurrences :: String -> String -> Int
+countOccurrences needle haystack
+  | null needle = 0
+  | otherwise = go haystack
+  where
+    go input =
+      case stripPrefix needle input of
+        Just rest ->
+          1 + go rest
+        Nothing ->
+          case input of
+            [] -> 0
+            _ : rest -> go rest
 
 cabalBuild :: FilePath -> String -> IO ()
 cabalBuild projectRoot target = do
