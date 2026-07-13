@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 module Main (main) where
 
 import Control.Monad (forM_, when)
@@ -6,6 +8,7 @@ import System.Directory
   ( createDirectoryIfMissing
   , doesFileExist
   , getCurrentDirectory
+  , makeAbsolute
   )
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath
@@ -30,12 +33,13 @@ main = do
   projectRoot <- findProjectRoot
   cabalBuild projectRoot "th-host-worker"
   workerPath <- cabalListBin projectRoot "th-host-worker"
+  fixturesDir <- makeAbsolute (takeDirectory __FILE__ </> "fixtures")
   let testCases =
         [ -- Proves that the plugin can replace an expression splice locally
           -- without executing the original Template Haskell expression.
           TestCase
             { testName = "dummy expression replacement"
-            , testModulePath = "th-cross-plugin/test/DummyExpr.hs"
+            , testModulePath = testFixturePath fixturesDir "DummyExpr.hs"
             , testPluginOptions =
                 [ "-fplugin=THCross.Plugin"
                 , "-fplugin-opt=THCross.Plugin:dummy-expr"
@@ -46,7 +50,7 @@ main = do
           -- plugin request -> worker evaluation -> textual fragment -> parser.
         , TestCase
             { testName = "worker expression splice"
-            , testModulePath = "th-cross-plugin/test/Example.hs"
+            , testModulePath = testFixturePath fixturesDir "Example.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences = []
             }
@@ -54,7 +58,7 @@ main = do
           -- module before evaluating the splice, so reify can see local decls.
         , TestCase
             { testName = "worker module-aware reify"
-            , testModulePath = "th-cross-plugin/test/ReifyExpr.hs"
+            , testModulePath = testFixturePath fixturesDir "ReifyExpr.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences = []
             }
@@ -62,7 +66,7 @@ main = do
           -- splice is evaluated by the worker before the later expression splice.
         , TestCase
             { testName = "worker declaration ordering"
-            , testModulePath = "th-cross-plugin/test/DeclOrder.hs"
+            , testModulePath = testFixturePath fixturesDir "DeclOrder.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences = []
             }
@@ -70,7 +74,7 @@ main = do
           -- one long-lived worker process, not two processes.
         , TestCase
             { testName = "persistent worker reuse"
-            , testModulePath = "th-cross-plugin/test/DuplicateSplices.hs"
+            , testModulePath = testFixturePath fixturesDir "DuplicateSplices.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences =
                 [ ("th-cross: started worker", 1)
@@ -78,7 +82,7 @@ main = do
                 ]
             }
         ]
-  forM_ testCases (runCase projectRoot)
+  forM_ testCases (runCase projectRoot fixturesDir)
 
 workerPluginOptions :: FilePath -> [String]
 workerPluginOptions workerPath =
@@ -86,8 +90,12 @@ workerPluginOptions workerPath =
   , "-fplugin-opt=THCross.Plugin:worker=" <> workerPath
   ]
 
-runCase :: FilePath -> TestCase -> IO ()
-runCase projectRoot testCase = do
+testFixturePath :: FilePath -> FilePath -> FilePath
+testFixturePath fixturesDir fileName =
+  fixturesDir </> fileName
+
+runCase :: FilePath -> FilePath -> TestCase -> IO ()
+runCase projectRoot fixturesDir testCase = do
   putStrLn ("integration: " <> testName testCase)
   let testBuildDir =
         projectRoot
@@ -104,7 +112,7 @@ runCase projectRoot testCase = do
         , "-fforce-recomp"
         , "-package"
         , "th-cross-plugin"
-        , "-ith-cross-plugin/test"
+        , "-i" <> fixturesDir
         , "-outputdir"
         , testBuildDir
         , "-hidir"
