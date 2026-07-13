@@ -23,7 +23,7 @@ import GHC.Fingerprint (fingerprintString)
 newtype SpliceKey = SpliceKey
   { unSpliceKey :: String
   }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 instance ToJSON SpliceKey where
   toJSON =

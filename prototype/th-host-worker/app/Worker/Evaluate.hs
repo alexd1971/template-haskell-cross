@@ -7,7 +7,7 @@ module Worker.Evaluate
 
 import Control.Exception (SomeException, catch, displayException)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
-import Data.List (find)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import System.Directory (createDirectoryIfMissing)
 import GHC
@@ -100,7 +100,7 @@ handleEvalException =
 -- invokes the hook for each splice it encounters.
 evaluateModuleSpliceText :: SpliceRequest -> IO (Either String String)
 evaluateModuleSpliceText request = do
-  capturesRef <- newIORef []
+  capturesRef <- newIORef Map.empty
   ghcLibDir <- getGhcLibDir
   createDirectoryIfMissing True hostWorkerBuildDir
   result <- runGhc (Just ghcLibDir) $ do
@@ -143,9 +143,12 @@ getGhcLibDir :: IO FilePath
 getGhcLibDir =
   trimTrailingNewline <$> readProcess "ghc" ["--print-libdir"] ""
 
+-- | Splice expansions captured while native GHC loaded the requested module.
+type CapturedSplices = Map.Map SpliceKey String
+
 -- | Install a host-only hook that delegates to the previous hook/default GHC
 -- evaluator, records the generated splice, and returns it unchanged.
-installCaptureHook :: IORef [CapturedSplice] -> Ghc ()
+installCaptureHook :: IORef CapturedSplices -> Ghc ()
 installCaptureHook capturesRef = do
   hscEnv <- getSession
   let hooks0 = hsc_hooks hscEnv
@@ -161,7 +164,7 @@ installCaptureHook capturesRef = do
 -- session. The hook then pretty-prints the expansion, stores it in 'capturesRef',
 -- and returns the original expansion back to GHC so module loading continues.
 captureMetaHook ::
-  IORef [CapturedSplice] ->
+  IORef CapturedSplices ->
   Maybe (MetaHook TcM) ->
   MetaHook TcM
 captureMetaHook capturesRef previousRunMeta request spliceExpr =
@@ -169,50 +172,34 @@ captureMetaHook capturesRef previousRunMeta request spliceExpr =
     MetaE wrap -> do
       expanded <- metaRequestE runMeta spliceExpr
       generatedText <- prettyExpandedExpression expanded
-      capture <- mkCapturedSplice ExpressionSplice spliceExpr generatedText
-      liftIO $ modifyIORef' capturesRef (capture :)
+      spliceKey <- mkCapturedSpliceKey ExpressionSplice spliceExpr
+      liftIO $ modifyIORef' capturesRef (Map.insert spliceKey generatedText)
       pure (wrap expanded)
     MetaD wrap -> do
       expanded <- metaRequestD runMeta spliceExpr
       generatedText <- prettyExpandedDeclarations expanded
-      capture <- mkCapturedSplice DeclarationSplice spliceExpr generatedText
-      liftIO $ modifyIORef' capturesRef (capture :)
+      spliceKey <- mkCapturedSpliceKey DeclarationSplice spliceExpr
+      liftIO $ modifyIORef' capturesRef (Map.insert spliceKey generatedText)
       pure (wrap expanded)
     _ ->
       runMeta request spliceExpr
   where
     runMeta = fromMaybe defaultRunMeta previousRunMeta
 
--- | One splice expansion observed while native GHC loaded the requested module.
---
--- The generated Haskell text is the payload returned to the cross-side plugin.
--- The splice key is the match field.
-data CapturedSplice = CapturedSplice
-  { capturedSpliceKey :: !SpliceKey
-  , capturedGeneratedHaskell :: !String
-  }
-  deriving (Eq, Show)
-
 -- | Attach the source-occurrence splice key to a captured expansion.
 --
 -- This runs in 'TcM' inside the host compiler, so it can read the current
 -- 'TcGblEnv' to discover which module is being compiled when the splice fires.
-mkCapturedSplice ::
+mkCapturedSpliceKey ::
   SpliceKind ->
   LHsExpr GhcTc ->
-  String ->
-  TcM CapturedSplice
-mkCapturedSplice spliceKind spliceExpr generatedText = do
+  TcM SpliceKey
+mkCapturedSpliceKey spliceKind spliceExpr = do
   tcg <- getGblEnv
   let spliceModuleName = moduleNameString (moduleName (tcg_mod tcg))
       sourceSpan = protocolSourceSpan (getLocA spliceExpr)
       kindText = spliceKindText spliceKind
-      spliceKey = mkSpliceKey spliceModuleName kindText (sourceSpanKeyText sourceSpan)
-  pure
-    CapturedSplice
-      { capturedSpliceKey = spliceKey
-      , capturedGeneratedHaskell = generatedText
-      }
+  pure (mkSpliceKey spliceModuleName kindText (sourceSpanKeyText sourceSpan))
 
 -- | Convert a generated expression AST back to textual Haskell for the wire
 -- format.
@@ -251,24 +238,19 @@ protocolSourceSpan = \case
 --
 -- Loading a module can execute several splices. The worker first selects by the
 -- opaque splice key derived from module name, splice kind, and source span.
-selectCapturedSplice :: SpliceRequest -> [CapturedSplice] -> Either String String
+selectCapturedSplice :: SpliceRequest -> CapturedSplices -> Either String String
 selectCapturedSplice request captures =
-  case find (matchesRequestSpliceKey request) captures of
-    Just capture ->
-      Right (capturedGeneratedHaskell capture)
+  case Map.lookup (requestSpliceKey request) captures of
+    Just generatedText ->
+      Right generatedText
     Nothing ->
       Left $
         "host GHC did not capture requested splice; request key "
           <> show (requestSpliceKey request)
           <> "; captured "
-          <> show (length captures)
+          <> show (Map.size captures)
           <> " splice(s): "
-          <> show captures
-
--- | Primary splice matcher shared by expression and declaration splices.
-matchesRequestSpliceKey :: SpliceRequest -> CapturedSplice -> Bool
-matchesRequestSpliceKey request capture =
-  capturedSpliceKey capture == requestSpliceKey request
+          <> show (Map.keys captures)
 
 -- | Remove trailing newlines from command output such as @ghc --print-libdir@.
 trimTrailingNewline :: String -> String
