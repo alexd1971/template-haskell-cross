@@ -35,8 +35,8 @@ instance FromJSON SpliceKey where
 
 -- | Build a splice key from source occurrence metadata.
 mkSpliceKey :: String -> String -> String -> SpliceKey
-mkSpliceKey spliceModuleName kindText sourceSpanText =
+mkSpliceKey spliceModuleName spliceKindName sourceSpanKey =
   SpliceKey (show (fingerprintString payload))
   where
     payload =
-      spliceModuleName <> ":" <> kindText <> ":" <> sourceSpanText
+      spliceModuleName <> ":" <> spliceKindName <> ":" <> sourceSpanKey

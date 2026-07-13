@@ -6,7 +6,8 @@
 -- AST values. The receiving compiler parses that text locally into its own
 -- @GhcPs@ AST.
 module THCross.Protocol
-  ( SourceSpan (..)
+  ( SpliceResult (..)
+  , SourceSpan (..)
   , SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
@@ -15,7 +16,7 @@ module THCross.Protocol
   , encodeRequestLine
   , encodeResponseLine
   , sourceSpanKeyText
-  , spliceKindText
+  , spliceKindToStr
   ) where
 
 import Data.Aeson
@@ -30,6 +31,29 @@ import Data.Aeson
   )
 import qualified Data.ByteString.Lazy as BL
 import THCross.SpliceKey (SpliceKey)
+
+-- | Result of host-side splice evaluation plus effects to replay in cross GHC.
+data SpliceResult = SpliceResult
+  { -- | Generated Haskell fragment parsed by the cross-side compiler.
+    spliceResultHaskell :: !String
+  , -- | Files registered through @addDependentFile@ while evaluating the splice.
+    spliceResultDependentFiles :: ![FilePath]
+  }
+  deriving (Eq, Show)
+
+instance ToJSON SpliceResult where
+  toJSON result =
+    object
+      [ "generatedHaskell" .= spliceResultHaskell result
+      , "dependentFiles" .= spliceResultDependentFiles result
+      ]
+
+instance FromJSON SpliceResult where
+  parseJSON =
+    withObject "SpliceResult" $ \obj ->
+      SpliceResult
+        <$> obj .: "generatedHaskell"
+        <*> obj .: "dependentFiles"
 
 -- | 1-based source span for the splice as seen by the cross GHC process.
 data SourceSpan = SourceSpan
@@ -83,7 +107,7 @@ data SpliceKind
   deriving (Eq, Show)
 
 instance ToJSON SpliceKind where
-  toJSON = toJSON . spliceKindText
+  toJSON = toJSON . spliceKindToStr
 
 instance FromJSON SpliceKind where
   parseJSON value = do
@@ -97,12 +121,12 @@ instance FromJSON SpliceKind where
       _ -> fail ("unknown splice kind: " <> raw)
 
 -- | Stable textual representation used on the wire.
-spliceKindText :: SpliceKind -> String
-spliceKindText ExpressionSplice = "expression"
-spliceKindText TypeSplice = "type"
-spliceKindText PatternSplice = "pattern"
-spliceKindText DeclarationSplice = "declaration"
-spliceKindText AnnotationWrapperSplice = "annotation-wrapper"
+spliceKindToStr :: SpliceKind -> String
+spliceKindToStr ExpressionSplice = "expression"
+spliceKindToStr TypeSplice = "type"
+spliceKindToStr PatternSplice = "pattern"
+spliceKindToStr DeclarationSplice = "declaration"
+spliceKindToStr AnnotationWrapperSplice = "annotation-wrapper"
 
 -- | Request sent by the cross-side plugin to the native host worker.
 data SpliceRequest = SpliceRequest
@@ -156,8 +180,8 @@ data SpliceResponse
   = SpliceOk
       { -- | Correlation id copied from the request.
         responseRequestId :: !String
-      , -- | Generated Haskell fragment parsed by the cross-side compiler.
-        responseGeneratedHaskell :: !String
+      , -- | Splice result and replayable side effects.
+        responseSpliceResult :: !SpliceResult
       }
   | SpliceError
       { -- | Correlation id copied from the request when available.
@@ -170,11 +194,12 @@ data SpliceResponse
 instance ToJSON SpliceResponse where
   toJSON response =
     case response of
-      SpliceOk reqId generated ->
+      SpliceOk reqId spliceResult ->
         object
           [ "requestId" .= reqId
           , "status" .= ("ok" :: String)
-          , "generatedHaskell" .= generated
+          , "generatedHaskell" .= spliceResultHaskell spliceResult
+          , "dependentFiles" .= spliceResultDependentFiles spliceResult
           ]
       SpliceError reqId message ->
         object
@@ -189,7 +214,12 @@ instance FromJSON SpliceResponse where
       reqId <- obj .: "requestId"
       status <- obj .: "status"
       case status :: String of
-        "ok" -> SpliceOk reqId <$> obj .: "generatedHaskell"
+        "ok" ->
+          SpliceOk reqId
+            <$> ( SpliceResult
+                    <$> obj .: "generatedHaskell"
+                    <*> obj .: "dependentFiles"
+                )
         "error" -> SpliceError reqId <$> obj .: "message"
         _ -> fail ("unknown response status: " <> status)
 

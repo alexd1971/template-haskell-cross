@@ -48,7 +48,7 @@ For correctness, every effect that changes GHC compilation state must either be:
 
 | Operation | GHC 9.8.4 behavior | Prototype classification | Recommendation |
 | --- | --- | --- | --- |
-| `addDependentFile` | `qAddDependentFile` prepends the path to `tcg_dependent_files`. | Must be forwarded to cross GHC. | Add `dependentFiles :: [FilePath]` to the worker response and append them to the cross-side `tcg_dependent_files`. This is the first side effect to implement. |
+| `addDependentFile` | `qAddDependentFile` prepends the path to `tcg_dependent_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `dependentFiles :: [FilePath]`; the cross-side plugin appends them to `tcg_dependent_files`. |
 | `addTempFile` | `qAddTempFile` allocates a GHC-session temp file through `newTempName`. | Host-only unless the path is later used by another effect. | Do not replay temp file allocation directly. If the file is later passed to `addForeignFilePath` or `addDependentFile`, propagate that higher-level effect. MVP can leave this unsupported except as part of `addForeignSource`. |
 | `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Must be forwarded or unsupported. | Unsupported in MVP. Later, capture the added declarations as textual Haskell and replay/graft them into the cross-side declaration group. |
 | `addForeignFile` | Deprecated wrapper around foreign source emission. | Must be forwarded or unsupported. | Treat via `addForeignSource`/`addForeignFilePath`. Unsupported in MVP. |
@@ -86,13 +86,13 @@ complete diagnostic replay
 arbitrary Q effect replay
 ```
 
-The next implementation target should be:
+Implemented in the prototype:
 
 ```text
 addDependentFile propagation
 ```
 
-because it directly affects build correctness and has a simple replay shape.
+This directly affects build correctness and has a simple replay shape.
 
 ## Suggested Response Extensions
 

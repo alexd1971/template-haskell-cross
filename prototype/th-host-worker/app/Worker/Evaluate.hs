@@ -8,7 +8,7 @@ module Worker.Evaluate
   ) where
 
 import Control.Exception (SomeException, catch, displayException)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import System.Directory (createDirectoryIfMissing)
@@ -40,7 +40,7 @@ import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
 import GHC.Tc.Types (TcGblEnv (..), TcM)
-import GHC.Tc.Utils.Monad (getGblEnv, liftIO)
+import GHC.Tc.Utils.Monad (getGblEnv, liftIO, readTcRef)
 import GHC.Types.Meta
   ( MetaHook
   , MetaRequest (..)
@@ -65,12 +65,13 @@ import GHC.Utils.Outputable
 import System.FilePath ((</>), takeDirectory)
 import System.Process (readProcess)
 import THCross.Protocol
-  ( SourceSpan (..)
+  ( SpliceResult (..)
+  , SourceSpan (..)
   , SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
   , sourceSpanKeyText
-  , spliceKindText
+  , spliceKindToStr
   )
 import THCross.SpliceKey
   ( SpliceKey
@@ -78,7 +79,7 @@ import THCross.SpliceKey
   )
 
 -- | Splice expansions captured while native GHC loaded the requested module.
-type CapturedSplices = Map.Map SpliceKey String
+type CapturedSplices = Map.Map SpliceKey SpliceResult
 
 -- | In-process cache of splice expansion results captured by whole-module loads.
 --
@@ -97,13 +98,13 @@ evaluateModuleSplice cache request = do
   result <- evaluateModuleSpliceText cache request `catch` handleEvalException
   pure $
     case result of
-      Right generated ->
-        SpliceOk (requestId request) generated
+      Right spliceResult ->
+        SpliceOk (requestId request) spliceResult
       Left err ->
         SpliceError (requestId request) err
 
 -- | Convert unexpected GHC API/runtime exceptions into protocol errors.
-handleEvalException :: SomeException -> IO (Either String String)
+handleEvalException :: SomeException -> IO (Either String SpliceResult)
 handleEvalException =
   pure . Left . ("native GHC splice evaluation failed: " <>) . displayException
 
@@ -115,13 +116,13 @@ handleEvalException =
 -- installs a capture hook, sets the requested source file as the target, and
 -- calls 'load'. During 'load', GHC performs normal declaration-group ordering and
 -- invokes the hook for each splice it encounters.
-evaluateModuleSpliceText :: EvaluationCache -> SpliceRequest -> IO (Either String String)
+evaluateModuleSpliceText :: EvaluationCache -> SpliceRequest -> IO (Either String SpliceResult)
 evaluateModuleSpliceText cache request = do
   cached <- Map.lookup (requestSpliceKey request) <$> readIORef cache
   case cached of
-    Just generatedText -> do
+    Just spliceResult -> do
       hPutStrLn stderr ("th-host-worker: cache hit " <> requestSourceFile request)
-      pure (Right generatedText)
+      pure (Right spliceResult)
     Nothing -> do
       hPutStrLn stderr ("th-host-worker: cache miss " <> requestSourceFile request)
       capturesResult <- captureModuleSplices request
@@ -136,28 +137,45 @@ evaluateModuleSpliceText cache request = do
 captureModuleSplices :: SpliceRequest -> IO (Either String CapturedSplices)
 captureModuleSplices request = do
   capturesRef <- newIORef Map.empty
+  dependentFilesRef <- newIORef []
   ghcLibDir <- getGhcLibDir
   createDirectoryIfMissing True hostWorkerBuildDir
   result <- runGhc (Just ghcLibDir) $ do
     dflags <- getSessionDynFlags
-    let sourceDir = takeDirectory (requestSourceFile request)
-        dflagsWithSourceDir =
-          (gopt_set dflags Opt_ForceRecomp)
-            { importPaths = sourceDir : importPaths dflags
-            , objectDir = Just hostWorkerBuildDir
-            , hiDir = Just hostWorkerBuildDir
-            , stubDir = Just hostWorkerBuildDir
-            }
-    setSessionDynFlags dflagsWithSourceDir
-    installCaptureHook capturesRef
-    target <- guessTarget (requestSourceFile request) Nothing Nothing
-    setTargets [target]
-    load LoadAllTargets
+    setSessionDynFlags (workerDynFlags dflags)
+    installCaptureHook capturesRef dependentFilesRef
+    loadRequestedModule
   case result of
     Failed ->
       pure (Left ("host GHC failed to load " <> requestSourceFile request))
-    Succeeded ->
-      Right <$> readIORef capturesRef
+    Succeeded -> do
+      captures <- readIORef capturesRef
+      dependentFiles <- readIORef dependentFilesRef
+      pure (Right (attachDependentFiles dependentFiles captures))
+  where
+    sourceDir =
+      takeDirectory (requestSourceFile request)
+
+    workerDynFlags dflags =
+      (gopt_set dflags Opt_ForceRecomp)
+        { importPaths = sourceDir : importPaths dflags
+        , objectDir = Just hostWorkerBuildDir
+        , hiDir = Just hostWorkerBuildDir
+        , stubDir = Just hostWorkerBuildDir
+        }
+
+    loadRequestedModule = do
+      target <- guessTarget (requestSourceFile request) Nothing Nothing
+      setTargets [target]
+      load LoadAllTargets
+
+-- | Attach module-level dependent files to each captured splice result.
+attachDependentFiles :: [FilePath] -> CapturedSplices -> CapturedSplices
+attachDependentFiles dependentFiles =
+  Map.map
+    ( \spliceResult ->
+        spliceResult {spliceResultDependentFiles = dependentFiles}
+    )
 
 -- | Directory for object/interface/stub files produced by host-side GHC loads.
 --
@@ -179,12 +197,12 @@ getGhcLibDir =
 
 -- | Install a host-only hook that delegates to the previous hook/default GHC
 -- evaluator, records the generated splice, and returns it unchanged.
-installCaptureHook :: IORef CapturedSplices -> Ghc ()
-installCaptureHook capturesRef = do
+installCaptureHook :: IORef CapturedSplices -> IORef [FilePath] -> Ghc ()
+installCaptureHook capturesRef dependentFilesRef = do
   hscEnv <- getSession
   let hooks0 = hsc_hooks hscEnv
       previousRunMeta = runMetaHook hooks0
-      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook capturesRef previousRunMeta)}
+      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook capturesRef dependentFilesRef previousRunMeta)}
   setSession hscEnv {hsc_hooks = hooks1}
 
 -- | Host-side 'runMetaHook' wrapper that records expansions without changing
@@ -196,26 +214,53 @@ installCaptureHook capturesRef = do
 -- and returns the original expansion back to GHC so module loading continues.
 captureMetaHook ::
   IORef CapturedSplices ->
+  IORef [FilePath] ->
   Maybe (MetaHook TcM) ->
   MetaHook TcM
-captureMetaHook capturesRef previousRunMeta request spliceExpr =
+captureMetaHook capturesRef dependentFilesRef previousRunMeta request spliceExpr =
   case request of
     MetaE wrap -> do
-      expanded <- metaRequestE runMeta spliceExpr
-      generatedText <- prettyExpandedExpression expanded
-      spliceKey <- mkCapturedSpliceKey ExpressionSplice spliceExpr
-      liftIO $ modifyIORef' capturesRef (Map.insert spliceKey generatedText)
+      expanded <-
+        captureSpliceResult
+          ExpressionSplice
+          (metaRequestE runMeta)
+          prettyExpandedExpression
       pure (wrap expanded)
     MetaD wrap -> do
-      expanded <- metaRequestD runMeta spliceExpr
-      generatedText <- prettyExpandedDeclarations expanded
-      spliceKey <- mkCapturedSpliceKey DeclarationSplice spliceExpr
-      liftIO $ modifyIORef' capturesRef (Map.insert spliceKey generatedText)
+      expanded <-
+        captureSpliceResult
+          DeclarationSplice
+          (metaRequestD runMeta)
+          prettyExpandedDeclarations
       pure (wrap expanded)
     _ ->
       runMeta request spliceExpr
   where
     runMeta = fromMaybe defaultRunMeta previousRunMeta
+
+    captureSpliceResult spliceKind evaluateSplice renderExpanded = do
+      expanded <- evaluateSplice spliceExpr
+      renderedExpansion <- renderExpanded expanded
+      spliceKey <- mkCapturedSpliceKey spliceKind spliceExpr
+      dependentFiles <- getDependentFiles
+      liftIO $ do
+        writeIORef dependentFilesRef dependentFiles
+        modifyIORef' capturesRef (Map.insert spliceKey (mkSpliceResult renderedExpansion))
+      pure expanded
+
+-- | Construct a captured splice result before module-level effects are attached.
+mkSpliceResult :: String -> SpliceResult
+mkSpliceResult text =
+  SpliceResult
+    { spliceResultHaskell = text
+    , spliceResultDependentFiles = []
+    }
+
+-- | Read files registered through @addDependentFile@ in the host GHC session.
+getDependentFiles :: TcM [FilePath]
+getDependentFiles = do
+  tcGblEnv <- getGblEnv
+  readTcRef (tcg_dependent_files tcGblEnv)
 
 -- | Attach the source-occurrence splice key to a captured expansion.
 --
@@ -226,11 +271,11 @@ mkCapturedSpliceKey ::
   LHsExpr GhcTc ->
   TcM SpliceKey
 mkCapturedSpliceKey spliceKind spliceExpr = do
-  tcg <- getGblEnv
-  let spliceModuleName = moduleNameString (moduleName (tcg_mod tcg))
+  tcGblEnv <- getGblEnv
+  let spliceModuleName = moduleNameString (moduleName (tcg_mod tcGblEnv))
       sourceSpan = protocolSourceSpan (getLocA spliceExpr)
-      kindText = spliceKindText spliceKind
-  pure (mkSpliceKey spliceModuleName kindText (sourceSpanKeyText sourceSpan))
+      spliceKindName = spliceKindToStr spliceKind
+  pure (mkSpliceKey spliceModuleName spliceKindName (sourceSpanKeyText sourceSpan))
 
 -- | Convert a generated expression AST back to textual Haskell for the wire
 -- format.
@@ -269,11 +314,11 @@ protocolSourceSpan = \case
 --
 -- Loading a module can execute several splices. The worker first selects by the
 -- opaque splice key derived from module name, splice kind, and source span.
-selectCapturedSplice :: SpliceRequest -> CapturedSplices -> Either String String
+selectCapturedSplice :: SpliceRequest -> CapturedSplices -> Either String SpliceResult
 selectCapturedSplice request captures =
   case Map.lookup (requestSpliceKey request) captures of
-    Just generatedText ->
-      Right generatedText
+    Just spliceResult ->
+      Right spliceResult
     Nothing ->
       Left $
         "host GHC did not capture requested splice; request key "

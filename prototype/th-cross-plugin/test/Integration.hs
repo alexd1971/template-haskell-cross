@@ -90,6 +90,17 @@ main = do
                 , ("th-host-worker: cache hit", 1)
                 ]
             }
+          -- Verifies that host-side addDependentFile effects are replayed into
+          -- the cross-side GHC session by the plugin.
+        , TestCase
+            { testName = "dependent file propagation"
+            , testModulePath = testFixturePath fixturesDir "DependentFile.hs"
+            , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences =
+                [ ("th-cross: dependent file th-cross-plugin/test/fixtures/schema.json", 1)
+                ]
+            , testStderrOccurrences = []
+            }
         ]
   forM_ testCases (runCase projectRoot fixturesDir)
 

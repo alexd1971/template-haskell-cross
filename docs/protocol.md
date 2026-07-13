@@ -76,15 +76,22 @@ Fields:
 {
   "requestId": "123",
   "status": "ok",
-  "generatedHaskell": "42"
+  "generatedHaskell": "42",
+  "dependentFiles": []
 }
 ```
+
+`dependentFiles` contains files registered by host-side Template Haskell through
+`addDependentFile`. The cross-side plugin must replay these into the cross GHC
+session.
 
 Fields:
 
 - `requestId`: request id copied from the request.
 - `status`: `"ok"`.
 - `generatedHaskell`: Haskell fragment to parse in the cross GHC process.
+- `dependentFiles`: files to register in the cross GHC session as TH
+  dependencies.
 
 ## Error Response
 

@@ -33,7 +33,7 @@ import GHC.Parser.Annotation (getLocA)
 import GHC.Settings.Config (cProjectVersion)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
 import GHC.Tc.Types (TcGblEnv (..), TcM)
-import GHC.Tc.Utils.Monad (getGblEnv, liftIO)
+import GHC.Tc.Utils.Monad (getGblEnv, liftIO, updTcRef)
 import GHC.Types.Meta (MetaHook, MetaRequest (..))
 import GHC.Types.SrcLoc
   ( SrcSpan (..)
@@ -61,14 +61,15 @@ import System.Process
   )
 import THCross.ParseFragment (parseDeclarationFragments, parseExpressionFragment)
 import THCross.Protocol
-  ( SourceSpan (..)
+  ( SpliceResult (..)
+  , SourceSpan (..)
   , SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
   , decodeResponseLine
   , encodeRequestLine
   , sourceSpanKeyText
-  , spliceKindText
+  , spliceKindToStr
   )
 import THCross.SpliceKey
   ( SpliceKey
@@ -108,44 +109,58 @@ installHook opts hscEnv = do
 -- ordering can be preserved for later expression splices.
 loggingMetaHook :: WorkerState -> PluginMode -> MetaHook TcM
 loggingMetaHook workerState mode request spliceExpr = do
-  tcg <- getGblEnv
-  let spliceModuleName = moduleNameString (moduleName (tcg_mod tcg))
-      kind = metaRequestKind request
-      kindText = spliceKindText kind
-      sourceLoc = getLocA spliceExpr
-      spanText = showSDocUnsafe (ppr (getLocA spliceExpr))
-      exprText = showSDocUnsafe (ppr spliceExpr)
-      (_, protocolSpan) = protocolSourceSpan sourceLoc
-      spliceKey = mkSpliceKey spliceModuleName kindText (sourceSpanKeyText protocolSpan)
+  tcGblEnv <- getGblEnv
   liftIO $ putStrLn "th-cross: intercepted Template Haskell splice"
-  liftIO $ putStrLn ("module: " <> spliceModuleName)
-  liftIO $ putStrLn ("kind: " <> kindText)
-  liftIO $ putStrLn ("splice-key: " <> unSpliceKey spliceKey)
-  liftIO $ putStrLn ("location: " <> spanText)
-  liftIO $ putStrLn ("expression: " <> exprText)
+  liftIO $ putStrLn ("module: " <> spliceModuleName tcGblEnv)
+  liftIO $ putStrLn ("kind: " <> spliceKindName)
+  liftIO $ putStrLn ("splice-key: " <> unSpliceKey (spliceKey tcGblEnv))
+  liftIO $ putStrLn ("location: " <> renderedSpan)
+  liftIO $ putStrLn ("expression: " <> renderedSpliceExpr)
   case request of
     MetaE wrap
       | DummyExprMode <- mode -> do
           liftIO $ putStrLn "replacement: 42"
           generated <- parseExpressionFragment "42"
           pure (wrap generated)
-      | WorkerMode workerPath <- mode -> do
-          generatedText <- requestWorker workerState workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText
-          generated <- parseExpressionFragment generatedText
+      | WorkerMode{} <- mode -> do
+          generated <-
+            evaluateWorkerSplice tcGblEnv parseExpressionFragment
           pure (wrap generated)
     MetaD wrap
-      | WorkerMode workerPath <- mode -> do
-          generatedText <- requestWorker workerState workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText
-          generated <- parseDeclarationFragments generatedText
+      | WorkerMode{} <- mode -> do
+          generated <-
+            evaluateWorkerSplice tcGblEnv parseDeclarationFragments
           pure (wrap generated)
     _
       | WorkerMode{} <- mode -> do
           let err =
                 "worker mode currently supports only expression and declaration splices; got "
-                  <> kindText
+                  <> spliceKindName
           liftIO $ putStrLn ("unsupported-splice-kind: " <> err)
           fail err
     _ -> defaultRunMeta request spliceExpr
+  where
+    spliceModuleName tcGblEnv =
+      moduleNameString (moduleName (tcg_mod tcGblEnv))
+
+    spliceKind = metaRequestKind request
+    spliceKindName = spliceKindToStr spliceKind
+    sourceLoc = getLocA spliceExpr
+    renderedSpan = showSDocUnsafe (ppr sourceLoc)
+    renderedSpliceExpr = showSDocUnsafe (ppr spliceExpr)
+    (_, protocolSpan) = protocolSourceSpan sourceLoc
+    spliceKey tcGblEnv =
+      mkSpliceKey (spliceModuleName tcGblEnv) spliceKindName (sourceSpanKeyText protocolSpan)
+
+    evaluateWorkerSplice tcGblEnv parseFragment =
+      case mode of
+        WorkerMode workerPath -> do
+          spliceResult <-
+            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+          replayDependentFiles (spliceResultDependentFiles spliceResult)
+          parseFragment (spliceResultHaskell spliceResult)
+        _ ->
+          fail "evaluateWorkerSplice called outside worker mode"
 
 -- | Runtime behavior selected by plugin options.
 data PluginMode
@@ -208,16 +223,16 @@ mkSpliceRequest ::
   SpliceKey ->
   String ->
   SpliceRequest
-mkSpliceRequest spliceModuleName kind sourceLoc spanText spliceKey exprText =
+mkSpliceRequest spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr =
   let (sourceFile, protocolSpan) = protocolSourceSpan sourceLoc
    in SpliceRequest
-        { requestId = spliceModuleName <> ":" <> spliceKindText kind <> ":" <> spanText
+        { requestId = spliceModuleName <> ":" <> spliceKindToStr spliceKind <> ":" <> renderedSpan
         , requestModuleName = spliceModuleName
         , requestSourceFile = sourceFile
-        , requestSpliceKind = kind
+        , requestSpliceKind = spliceKind
         , requestSourceSpan = protocolSpan
         , requestSpliceKey = spliceKey
-        , requestSpliceExpression = exprText
+        , requestSpliceExpression = renderedSpliceExpr
         , requestCrossGhcVersion = cProjectVersion
         }
 
@@ -255,23 +270,33 @@ requestWorker ::
   String ->
   SpliceKey ->
   String ->
-  TcM String
-requestWorker workerState workerPath spliceModuleName kind sourceLoc spanText spliceKey exprText = do
+  TcM SpliceResult
+requestWorker workerState workerPath spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr = do
   let workerRequest =
-        mkSpliceRequest spliceModuleName kind sourceLoc spanText spliceKey exprText
+        mkSpliceRequest spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr
   liftIO $ putStrLn ("worker: " <> workerPath)
   callWorker workerState workerPath workerRequest >>= \case
     Left err -> do
       liftIO $ putStrLn ("worker-error: " <> err)
       fail err
-    Right text ->
-      pure text
+    Right spliceResult ->
+      pure spliceResult
+
+-- | Replay host-side @addDependentFile@ effects in the cross-side GHC session.
+replayDependentFiles :: [FilePath] -> TcM ()
+replayDependentFiles dependentFiles = do
+  tcGblEnv <- getGblEnv
+  updTcRef (tcg_dependent_files tcGblEnv) (dependentFiles <>)
+  liftIO $
+    mapM_
+      (\filePath -> putStrLn ("th-cross: dependent file " <> filePath))
+      dependentFiles
 
 -- | Run one JSON-lines request/response exchange with the worker executable.
 --
 -- The worker process is started lazily on the first splice and then reused for
 -- later splices in the same GHC session.
-callWorker :: WorkerState -> FilePath -> SpliceRequest -> TcM (Either String String)
+callWorker :: WorkerState -> FilePath -> SpliceRequest -> TcM (Either String SpliceResult)
 callWorker workerState workerPath request =
   liftIO $
     modifyMVar workerState $ \maybeWorker -> do
@@ -306,7 +331,7 @@ startWorker workerPath = do
       }
 
 -- | Send one request over an already running worker process and read its response.
-sendWorkerRequest :: WorkerHandle -> SpliceRequest -> IO (Either String String)
+sendWorkerRequest :: WorkerHandle -> SpliceRequest -> IO (Either String SpliceResult)
 sendWorkerRequest worker request = do
   output <- try $ do
     BL.hPutStr (workerInput worker) (encodeRequestLine request)
@@ -323,11 +348,11 @@ sendWorkerRequest worker request = do
           Right response ->
             handleWorkerResponse (requestId request) response
 
--- | Validate a worker response and extract the generated Haskell fragment.
+-- | Validate a worker response and extract the splice result.
 --
 -- A request id mismatch is treated as a hard protocol error because accepting a
 -- fragment for the wrong splice would graft code into the wrong source location.
-handleWorkerResponse :: String -> SpliceResponse -> Either String String
+handleWorkerResponse :: String -> SpliceResponse -> Either String SpliceResult
 handleWorkerResponse expectedRequestId response
   | responseRequestId response /= expectedRequestId =
       Left
@@ -338,7 +363,7 @@ handleWorkerResponse expectedRequestId response
         )
   | otherwise =
       case response of
-        SpliceOk _ generated ->
-          Right generated
+        SpliceOk _ spliceResult ->
+          Right spliceResult
         SpliceError _ message ->
           Left ("TH host worker error: " <> message)
