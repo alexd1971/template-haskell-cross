@@ -2,7 +2,9 @@
 
 -- | Host-side Template Haskell evaluation through a native GHC session.
 module Worker.Evaluate
-  ( evaluateModuleSplice
+  ( EvaluationCache
+  , evaluateModuleSplice
+  , newEvaluationCache
   ) where
 
 import Control.Exception (SomeException, catch, displayException)
@@ -10,6 +12,7 @@ import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import System.Directory (createDirectoryIfMissing)
+import System.IO (hPutStrLn, stderr)
 import GHC
   ( Ghc
   , GhcMonad (getSession)
@@ -74,10 +77,24 @@ import THCross.SpliceKey
   , mkSpliceKey
   )
 
+-- | Splice expansions captured while native GHC loaded the requested module.
+type CapturedSplices = Map.Map SpliceKey String
+
+-- | In-process cache of splice expansion results captured by whole-module loads.
+--
+-- The worker process is persistent, so this cache survives multiple requests
+-- handled by one worker. It is intentionally not written to disk yet.
+type EvaluationCache = IORef CapturedSplices
+
+-- | Create an empty worker-local expansion cache.
+newEvaluationCache :: IO EvaluationCache
+newEvaluationCache =
+  newIORef Map.empty
+
 -- | Evaluate the requested splice and preserve the original request id.
-evaluateModuleSplice :: SpliceRequest -> IO SpliceResponse
-evaluateModuleSplice request = do
-  result <- evaluateModuleSpliceText request `catch` handleEvalException
+evaluateModuleSplice :: EvaluationCache -> SpliceRequest -> IO SpliceResponse
+evaluateModuleSplice cache request = do
+  result <- evaluateModuleSpliceText cache request `catch` handleEvalException
   pure $
     case result of
       Right generated ->
@@ -98,8 +115,26 @@ handleEvalException =
 -- installs a capture hook, sets the requested source file as the target, and
 -- calls 'load'. During 'load', GHC performs normal declaration-group ordering and
 -- invokes the hook for each splice it encounters.
-evaluateModuleSpliceText :: SpliceRequest -> IO (Either String String)
-evaluateModuleSpliceText request = do
+evaluateModuleSpliceText :: EvaluationCache -> SpliceRequest -> IO (Either String String)
+evaluateModuleSpliceText cache request = do
+  cached <- Map.lookup (requestSpliceKey request) <$> readIORef cache
+  case cached of
+    Just generatedText -> do
+      hPutStrLn stderr ("th-host-worker: cache hit " <> requestSourceFile request)
+      pure (Right generatedText)
+    Nothing -> do
+      hPutStrLn stderr ("th-host-worker: cache miss " <> requestSourceFile request)
+      capturesResult <- captureModuleSplices request
+      case capturesResult of
+        Left err ->
+          pure (Left err)
+        Right captures -> do
+          modifyIORef' cache (Map.union captures)
+          pure (selectCapturedSplice request captures)
+
+-- | Load the requested source module and capture all supported splice expansions.
+captureModuleSplices :: SpliceRequest -> IO (Either String CapturedSplices)
+captureModuleSplices request = do
   capturesRef <- newIORef Map.empty
   ghcLibDir <- getGhcLibDir
   createDirectoryIfMissing True hostWorkerBuildDir
@@ -121,9 +156,8 @@ evaluateModuleSpliceText request = do
   case result of
     Failed ->
       pure (Left ("host GHC failed to load " <> requestSourceFile request))
-    Succeeded -> do
-      captures <- readIORef capturesRef
-      pure (selectCapturedSplice request captures)
+    Succeeded ->
+      Right <$> readIORef capturesRef
 
 -- | Directory for object/interface/stub files produced by host-side GHC loads.
 --
@@ -142,9 +176,6 @@ hostWorkerBuildDir =
 getGhcLibDir :: IO FilePath
 getGhcLibDir =
   trimTrailingNewline <$> readProcess "ghc" ["--print-libdir"] ""
-
--- | Splice expansions captured while native GHC loaded the requested module.
-type CapturedSplices = Map.Map SpliceKey String
 
 -- | Install a host-only hook that delegates to the previous hook/default GHC
 -- evaluator, records the generated splice, and returns it unchanged.

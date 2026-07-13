@@ -26,6 +26,7 @@ data TestCase = TestCase
   , testModulePath :: !FilePath
   , testPluginOptions :: ![String]
   , testStdoutOccurrences :: ![(String, Int)]
+  , testStderrOccurrences :: ![(String, Int)]
   }
 
 main :: IO ()
@@ -45,6 +46,7 @@ main = do
                 , "-fplugin-opt=THCross.Plugin:dummy-expr"
                 ]
             , testStdoutOccurrences = []
+            , testStderrOccurrences = []
             }
           -- Exercises the first worker-backed expression splice path:
           -- plugin request -> worker evaluation -> textual fragment -> parser.
@@ -53,6 +55,7 @@ main = do
             , testModulePath = testFixturePath fixturesDir "Example.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences = []
+            , testStderrOccurrences = []
             }
           -- Verifies module-aware host evaluation: the worker loads the source
           -- module before evaluating the splice, so reify can see local decls.
@@ -61,6 +64,7 @@ main = do
             , testModulePath = testFixturePath fixturesDir "ReifyExpr.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences = []
+            , testStderrOccurrences = []
             }
           -- Keeps declaration splice ordering under test. The declaration
           -- splice is evaluated by the worker before the later expression splice.
@@ -69,6 +73,7 @@ main = do
             , testModulePath = testFixturePath fixturesDir "DeclOrder.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences = []
+            , testStderrOccurrences = []
             }
           -- Confirms that two expression splices in one compiler session use
           -- one long-lived worker process, not two processes.
@@ -79,6 +84,10 @@ main = do
             , testStdoutOccurrences =
                 [ ("th-cross: started worker", 1)
                 , ("th-cross: reusing worker", 1)
+                ]
+            , testStderrOccurrences =
+                [ ("th-host-worker: cache miss", 1)
+                , ("th-host-worker: cache hit", 1)
                 ]
             }
         ]
@@ -127,7 +136,8 @@ runCase projectRoot fixturesDir testCase = do
   (exitCode, out, err) <- readCreateProcessWithExitCode (inProject projectRoot (proc "cabal" args)) ""
   case exitCode of
     ExitSuccess ->
-      checkStdoutOccurrences testCase out
+      checkOutputOccurrences "stdout" testCase out (testStdoutOccurrences testCase)
+        >> checkOutputOccurrences "stderr" testCase err (testStderrOccurrences testCase)
     ExitFailure code -> do
       putStrLn ("integration test failed: " <> testName testCase)
       putStrLn ("exit code: " <> show code)
@@ -137,22 +147,24 @@ runCase projectRoot fixturesDir testCase = do
       putStr err
       exitFailure
 
-checkStdoutOccurrences :: TestCase -> String -> IO ()
-checkStdoutOccurrences testCase out =
-  forM_ (testStdoutOccurrences testCase) $ \(needle, expected) -> do
-    let actual = countOccurrences needle out
+checkOutputOccurrences :: String -> TestCase -> String -> [(String, Int)] -> IO ()
+checkOutputOccurrences streamName testCase output expectations =
+  forM_ expectations $ \(needle, expected) -> do
+    let actual = countOccurrences needle output
     when (actual /= expected) $ do
       putStrLn ("integration test failed: " <> testName testCase)
       putStrLn
-        ( "expected stdout occurrence count for "
+        ( "expected "
+            <> streamName
+            <> " occurrence count for "
             <> show needle
             <> ": "
             <> show expected
             <> ", got "
             <> show actual
         )
-      putStrLn "stdout:"
-      putStr out
+      putStrLn (streamName <> ":")
+      putStr output
       exitFailure
 
 countOccurrences :: String -> String -> Int

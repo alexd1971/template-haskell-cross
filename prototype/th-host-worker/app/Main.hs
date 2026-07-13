@@ -20,7 +20,11 @@ import THCross.Protocol
   , decodeRequestLine
   , encodeResponseLine
   )
-import Worker.Evaluate (evaluateModuleSplice)
+import Worker.Evaluate
+  ( EvaluationCache
+  , evaluateModuleSplice
+  , newEvaluationCache
+  )
 
 -- | Start the line-oriented worker protocol.
 --
@@ -29,41 +33,42 @@ main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   hSetBuffering stderr LineBuffering
-  workerLoop
+  cache <- newEvaluationCache
+  workerLoop cache
 
 -- | Process JSON-lines requests until stdin closes.
-workerLoop :: IO ()
-workerLoop = do
+workerLoop :: EvaluationCache -> IO ()
+workerLoop cache = do
   done <- isEOF
   if done
     then pure ()
     else do
       line <- getLine
-      response <- handleLine (BL.pack line)
+      response <- handleLine cache (BL.pack line)
       BL.putStr (encodeResponseLine response)
-      workerLoop
+      workerLoop cache
 
 -- | Decode one protocol frame and convert decode failures into protocol errors.
-handleLine :: BL.ByteString -> IO SpliceResponse
-handleLine line =
+handleLine :: EvaluationCache -> BL.ByteString -> IO SpliceResponse
+handleLine cache line =
   case decodeRequestLine line of
     Left err ->
       pure (SpliceError "<decode-error>" err)
     Right request ->
-      handleRequest request
+      handleRequest cache request
 
 -- | Dispatch by splice kind.
 --
 -- The prototype currently evaluates expression and declaration splices. Type,
 -- pattern, and annotation-wrapper splices stay unsupported until the parser and
 -- worker both handle their result shapes.
-handleRequest :: SpliceRequest -> IO SpliceResponse
-handleRequest request =
+handleRequest :: EvaluationCache -> SpliceRequest -> IO SpliceResponse
+handleRequest cache request =
   case requestSpliceKind request of
     ExpressionSplice ->
-      evaluateModuleSplice request
+      evaluateModuleSplice cache request
     DeclarationSplice ->
-      evaluateModuleSplice request
+      evaluateModuleSplice cache request
     _ ->
       pure $
         SpliceError
