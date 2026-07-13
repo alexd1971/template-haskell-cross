@@ -7,6 +7,6 @@ import Language.Haskell.TH.Syntax (addDependentFile)
 foo :: Int
 foo =
   $( do
-       addDependentFile "th-cross-plugin/test/fixtures/schema.json"
+       addDependentFile "schema.json"
        [| 42 |]
    )

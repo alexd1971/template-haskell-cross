@@ -40,7 +40,7 @@ main = do
           -- without executing the original Template Haskell expression.
           TestCase
             { testName = "dummy expression replacement"
-            , testModulePath = testFixturePath fixturesDir "DummyExpr.hs"
+            , testModulePath = "DummyExpr.hs"
             , testPluginOptions =
                 [ "-fplugin=THCross.Plugin"
                 , "-fplugin-opt=THCross.Plugin:dummy-expr"
@@ -52,7 +52,7 @@ main = do
           -- plugin request -> worker evaluation -> textual fragment -> parser.
         , TestCase
             { testName = "worker expression splice"
-            , testModulePath = testFixturePath fixturesDir "Example.hs"
+            , testModulePath = "Example.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
@@ -61,7 +61,7 @@ main = do
           -- module before evaluating the splice, so reify can see local decls.
         , TestCase
             { testName = "worker module-aware reify"
-            , testModulePath = testFixturePath fixturesDir "ReifyExpr.hs"
+            , testModulePath = "ReifyExpr.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
@@ -70,7 +70,7 @@ main = do
           -- splice is evaluated by the worker before the later expression splice.
         , TestCase
             { testName = "worker declaration ordering"
-            , testModulePath = testFixturePath fixturesDir "DeclOrder.hs"
+            , testModulePath = "DeclOrder.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
@@ -79,7 +79,7 @@ main = do
           -- one long-lived worker process, not two processes.
         , TestCase
             { testName = "persistent worker reuse"
-            , testModulePath = testFixturePath fixturesDir "DuplicateSplices.hs"
+            , testModulePath = "DuplicateSplices.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences =
                 [ ("th-cross: started worker", 1)
@@ -94,10 +94,10 @@ main = do
           -- the cross-side GHC session by the plugin.
         , TestCase
             { testName = "dependent file propagation"
-            , testModulePath = testFixturePath fixturesDir "DependentFile.hs"
+            , testModulePath = "DependentFile.hs"
             , testPluginOptions = workerPluginOptions workerPath
             , testStdoutOccurrences =
-                [ ("th-cross: dependent file th-cross-plugin/test/fixtures/schema.json", 1)
+                [ ("th-cross: dependent file schema.json", 1)
                 ]
             , testStderrOccurrences = []
             }
@@ -110,10 +110,6 @@ workerPluginOptions workerPath =
   , "-fplugin-opt=THCross.Plugin:worker=" <> workerPath
   ]
 
-testFixturePath :: FilePath -> FilePath -> FilePath
-testFixturePath fixturesDir fileName =
-  fixturesDir </> fileName
-
 runCase :: FilePath -> FilePath -> TestCase -> IO ()
 runCase projectRoot fixturesDir testCase = do
   putStrLn ("integration: " <> testName testCase)
@@ -125,6 +121,8 @@ runCase projectRoot fixturesDir testCase = do
   createDirectoryIfMissing True testBuildDir
   let args =
         [ "exec"
+        , "--project-dir"
+        , projectRoot
         , "--"
         , "ghc"
         , "-v0"
@@ -144,7 +142,7 @@ runCase projectRoot fixturesDir testCase = do
         ]
           <> testPluginOptions testCase
           <> [testModulePath testCase]
-  (exitCode, out, err) <- readCreateProcessWithExitCode (inProject projectRoot (proc "cabal" args)) ""
+  (exitCode, out, err) <- readCreateProcessWithExitCode (inProject fixturesDir (proc "cabal" args)) ""
   case exitCode of
     ExitSuccess ->
       checkOutputOccurrences "stdout" testCase out (testStdoutOccurrences testCase)
