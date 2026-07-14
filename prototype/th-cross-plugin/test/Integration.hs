@@ -132,6 +132,17 @@ main = do
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
+          -- Verifies that recover discards errors from the failed branch and
+          -- returns the recovery value inside host-side TH evaluation.
+        , TestCase
+            { testName = "TH recover semantics"
+            , testModulePath = "Recover.hs"
+            , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences = []
+            , testStderrOccurrences =
+                [ ("expected recovered error", 0)
+                ]
+            }
         ]
   forM_ testCases (runCase projectRoot fixturesDir)
 
