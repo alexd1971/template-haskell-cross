@@ -122,6 +122,16 @@ main = do
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
+          -- Confirms that addTempFile allocates a usable host-side temporary
+          -- file during splice evaluation. The temp file itself is not replayed
+          -- into the cross-side compiler session.
+        , TestCase
+            { testName = "host addTempFile execution"
+            , testModulePath = "AddTempFile.hs"
+            , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences = []
+            , testStderrOccurrences = []
+            }
         ]
   forM_ testCases (runCase projectRoot fixturesDir)
 
