@@ -143,6 +143,15 @@ main = do
                 [ ("expected recovered error", 0)
                 ]
             }
+          -- Verifies that getQ/putQ state is preserved between splices while
+          -- the worker performs one whole-module host evaluation.
+        , TestCase
+            { testName = "host Q state"
+            , testModulePath = "GetPutQ.hs"
+            , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences = []
+            , testStderrOccurrences = []
+            }
         ]
   forM_ testCases (runCase projectRoot fixturesDir)
 
