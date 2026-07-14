@@ -51,8 +51,8 @@ For correctness, every effect that changes GHC compilation state must either be:
 | `addDependentFile` | `qAddDependentFile` prepends the path to `tcg_dependent_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `dependentFiles :: [FilePath]`; the cross-side plugin appends them to `tcg_dependent_files`. |
 | `addTempFile` | `qAddTempFile` allocates a GHC-session temp file through `newTempName`. | Host-only effect, covered by smoke test. | Do not replay temp file allocation directly. If the file is later passed to `addForeignFilePath` or `addDependentFile`, propagate that higher-level effect. |
 | `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Must be forwarded or unsupported. | Unsupported in MVP. Later, capture the added declarations as textual Haskell and replay/graft them into the cross-side declaration group. |
-| `addForeignFile` | Deprecated wrapper around foreign source emission. | Must be forwarded or unsupported. | Treat via `addForeignSource`/`addForeignFilePath`. Unsupported in MVP. |
-| `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Must be forwarded to cross GHC. | Worker response should include foreign files. Cross GHC must compile/link them for the target, not the host. Unsupported in MVP. |
+| `addForeignFile` | Deprecated wrapper around foreign source emission. | Must be forwarded through `addForeignFilePath` or unsupported. | Treat via `addForeignSource`/`addForeignFilePath`. Direct string source emission is still unsupported in MVP. |
+| `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `foreignFiles`; the cross-side plugin appends them to `tcg_th_foreign_files`, so the target-side build owns compilation/linking. |
 | `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Must be forwarded to cross GHC. | Unsupported in MVP. Later replay on the cross-side compilation session; plugin availability must be checked in the cross compiler environment. |
 | `addModFinalizer` | Stores a finalizer reference for later module-finalizer execution with the local environment. | Must be modeled explicitly or unsupported. | Unsupported in MVP. Host execution may run finalizers, but their resulting diagnostics/dependencies/state changes are not automatically visible to cross GHC. |
 | `reportWarning` | `qReport False` adds a diagnostic and continues. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError False message)`. | Forwarded to cross GHC in the prototype. | The worker response includes this TH diagnostic; the cross-side plugin replays it with `addDiagnostic`. |
@@ -73,14 +73,14 @@ recover behavior inside host execution
 getQ/putQ inside one whole-module host load
 runIO execution on the host
 addTempFile allocation and use on the host
+addForeignFilePath propagation to the cross GHC session
 ```
 
 The current MVP should explicitly not support:
 
 ```text
 addTopDecls
-addForeignFile
-addForeignFilePath
+addForeignFile direct source emission
 addCorePlugin
 addModFinalizer
 complete diagnostic replay
@@ -91,9 +91,16 @@ Implemented in the prototype:
 
 ```text
 addDependentFile propagation
+addForeignFilePath propagation
+reportWarning/reportError diagnostics propagation
+runIO host execution
+addTempFile host execution
+recover host semantics
+getQ/putQ host module state
 ```
 
-This directly affects build correctness and has a simple replay shape.
+`addDependentFile` and `addForeignFilePath` directly affect build correctness and
+have simple replay shapes.
 
 ## Suggested Response Extensions
 
@@ -106,6 +113,12 @@ For `addDependentFile`:
   "generatedHaskell": "42",
   "dependentFiles": [
     "/absolute/path/schema.json"
+  ],
+  "foreignFiles": [
+    {
+      "language": "c",
+      "path": "/absolute/path/generated.c"
+    }
   ]
 }
 ```
@@ -118,12 +131,6 @@ Later response fields:
     {
       "message": "...",
       "sourceSpan": null
-    }
-  ],
-  "foreignFiles": [
-    {
-      "language": "LangC",
-      "path": "/absolute/path/generated.c"
     }
   ],
   "corePlugins": [

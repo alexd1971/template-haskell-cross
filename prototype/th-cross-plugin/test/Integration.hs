@@ -152,6 +152,17 @@ main = do
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
+          -- Verifies that host-side addForeignFilePath effects are replayed
+          -- into the cross-side GHC session by the plugin.
+        , TestCase
+            { testName = "foreign file propagation"
+            , testModulePath = "AddForeignFilePath.hs"
+            , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences =
+                [ ("th-cross: foreign file c cbits/th_foreign_file_path.c", 1)
+                ]
+            , testStderrOccurrences = []
+            }
         ]
   forM_ testCases (runCase projectRoot fixturesDir)
 

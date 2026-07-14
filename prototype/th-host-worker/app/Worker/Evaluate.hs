@@ -75,6 +75,7 @@ import System.FilePath ((</>), takeDirectory)
 import System.Process (readProcess)
 import THCross.Protocol
   ( SpliceDiagnostic (..)
+  , SpliceForeignFile (..)
   , SpliceResult (..)
   , SourceSpan (..)
   , SpliceKind (..)
@@ -105,7 +106,7 @@ newEvaluationCache =
 -- | Evaluate the requested splice and preserve the original request id.
 evaluateModuleSplice :: EvaluationCache -> SpliceRequest -> IO SpliceResponse
 evaluateModuleSplice cache request = do
-  result <- evaluateModuleSpliceText cache request `catch` handleEvalException
+  result <- evaluateModuleSpliceResult cache request `catch` handleEvalException
   pure $
     case result of
       Right spliceResult ->
@@ -126,8 +127,8 @@ handleEvalException =
 -- installs a capture hook, sets the requested source file as the target, and
 -- calls 'load'. During 'load', GHC performs normal declaration-group ordering and
 -- invokes the hook for each splice it encounters.
-evaluateModuleSpliceText :: EvaluationCache -> SpliceRequest -> IO (Either String SpliceResult)
-evaluateModuleSpliceText cache request = do
+evaluateModuleSpliceResult :: EvaluationCache -> SpliceRequest -> IO (Either String SpliceResult)
+evaluateModuleSpliceResult cache request = do
   cached <- Map.lookup (requestSpliceKey request) <$> readIORef cache
   case cached of
     Just spliceResult -> do
@@ -148,12 +149,13 @@ captureModuleSplices :: SpliceRequest -> IO (Either String CapturedSplices)
 captureModuleSplices request = do
   capturesRef <- newIORef Map.empty
   dependentFilesRef <- newIORef []
+  foreignFilesRef <- newIORef []
   ghcLibDir <- getGhcLibDir
   createDirectoryIfMissing True hostWorkerBuildDir
   result <- runGhc (Just ghcLibDir) $ do
     dflags <- getSessionDynFlags
     setSessionDynFlags (workerDynFlags dflags)
-    installCaptureHook capturesRef dependentFilesRef
+    installCaptureHook capturesRef dependentFilesRef foreignFilesRef
     loadRequestedModule
   case result of
     Failed ->
@@ -161,7 +163,8 @@ captureModuleSplices request = do
     Succeeded -> do
       captures <- readIORef capturesRef
       dependentFiles <- readIORef dependentFilesRef
-      pure (Right (attachDependentFiles dependentFiles captures))
+      foreignFiles <- readIORef foreignFilesRef
+      pure (Right (attachModuleEffects dependentFiles foreignFiles captures))
   where
     sourceDir =
       takeDirectory (requestSourceFile request)
@@ -179,12 +182,15 @@ captureModuleSplices request = do
       setTargets [target]
       load LoadAllTargets
 
--- | Attach module-level dependent files to each captured splice result.
-attachDependentFiles :: [FilePath] -> CapturedSplices -> CapturedSplices
-attachDependentFiles dependentFiles =
+-- | Attach module-level replayable effects to each captured splice result.
+attachModuleEffects :: [FilePath] -> [SpliceForeignFile] -> CapturedSplices -> CapturedSplices
+attachModuleEffects dependentFiles foreignFiles =
   Map.map
     ( \spliceResult ->
-        spliceResult {spliceResultDependentFiles = dependentFiles}
+        spliceResult
+          { spliceResultDependentFiles = dependentFiles
+          , spliceResultForeignFiles = foreignFiles
+          }
     )
 
 -- | Directory for object/interface/stub files produced by host-side GHC loads.
@@ -207,12 +213,16 @@ getGhcLibDir =
 
 -- | Install a host-only hook that delegates to the previous hook/default GHC
 -- evaluator, records the generated splice, and returns it unchanged.
-installCaptureHook :: IORef CapturedSplices -> IORef [FilePath] -> Ghc ()
-installCaptureHook capturesRef dependentFilesRef = do
+installCaptureHook ::
+  IORef CapturedSplices ->
+  IORef [FilePath] ->
+  IORef [SpliceForeignFile] ->
+  Ghc ()
+installCaptureHook capturesRef dependentFilesRef foreignFilesRef = do
   hscEnv <- getSession
   let hooks0 = hsc_hooks hscEnv
       previousRunMeta = runMetaHook hooks0
-      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook capturesRef dependentFilesRef previousRunMeta)}
+      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta)}
   setSession hscEnv {hsc_hooks = hooks1}
 
 -- | Host-side 'runMetaHook' wrapper that records expansions without changing
@@ -225,9 +235,10 @@ installCaptureHook capturesRef dependentFilesRef = do
 captureMetaHook ::
   IORef CapturedSplices ->
   IORef [FilePath] ->
+  IORef [SpliceForeignFile] ->
   Maybe (MetaHook TcM) ->
   MetaHook TcM
-captureMetaHook capturesRef dependentFilesRef previousRunMeta request spliceExpr =
+captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta request spliceExpr =
   case request of
     MetaE wrap -> do
       expanded <-
@@ -254,8 +265,10 @@ captureMetaHook capturesRef dependentFilesRef previousRunMeta request spliceExpr
       renderedExpansion <- renderExpanded expanded
       spliceKey <- mkCapturedSpliceKey spliceKind spliceExpr
       dependentFiles <- getDependentFiles
+      foreignFiles <- getForeignFiles
       liftIO $ do
         writeIORef dependentFilesRef dependentFiles
+        writeIORef foreignFilesRef foreignFiles
         modifyIORef' capturesRef (Map.insert spliceKey (mkSpliceResult renderedExpansion diagnostics))
       pure expanded
 
@@ -265,6 +278,7 @@ mkSpliceResult renderedExpansion diagnostics =
   SpliceResult
     { spliceResultHaskell = renderedExpansion
     , spliceResultDependentFiles = []
+    , spliceResultForeignFiles = []
     , spliceResultDiagnostics = diagnostics
     }
 
@@ -301,6 +315,19 @@ getDependentFiles :: TcM [FilePath]
 getDependentFiles = do
   tcGblEnv <- getGblEnv
   readTcRef (tcg_dependent_files tcGblEnv)
+
+-- | Read foreign files registered through @addForeignFilePath@ in the host GHC
+-- session.
+getForeignFiles :: TcM [SpliceForeignFile]
+getForeignFiles = do
+  tcGblEnv <- getGblEnv
+  map toSpliceForeignFile <$> readTcRef (tcg_th_foreign_files tcGblEnv)
+  where
+    toSpliceForeignFile (lang, path) =
+      SpliceForeignFile
+        { spliceForeignFileLang = lang
+        , spliceForeignFilePath = path
+        }
 
 -- | Attach the source-occurrence splice key to a captured expansion.
 --

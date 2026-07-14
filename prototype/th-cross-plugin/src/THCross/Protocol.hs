@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | JSON-lines protocol shared by the cross-side plugin and host TH worker.
@@ -7,6 +8,7 @@
 -- @GhcPs@ AST.
 module THCross.Protocol
   ( SpliceDiagnostic (..)
+  , SpliceForeignFile (..)
   , SpliceResult (..)
   , SourceSpan (..)
   , SpliceKind (..)
@@ -16,6 +18,7 @@ module THCross.Protocol
   , decodeResponseLine
   , encodeRequestLine
   , encodeResponseLine
+  , foreignSrcLangToStr
   , sourceSpanKeyText
   , spliceKindToStr
   ) where
@@ -33,6 +36,7 @@ import Data.Aeson
   , (.=)
   )
 import qualified Data.ByteString.Lazy as BL
+import GHC.Tc.Types (ForeignSrcLang (..))
 import THCross.SpliceKey (SpliceKey)
 
 -- | Diagnostic produced by host-side TH through @reportWarning@ or
@@ -67,12 +71,64 @@ instance FromJSON SpliceDiagnostic where
           raw -> fail ("unknown diagnostic severity: " <> raw)
       SpliceDiagnostic isError <$> obj .: "message"
 
+-- | Foreign source file registered by host-side TH through
+-- @addForeignFilePath@.
+data SpliceForeignFile = SpliceForeignFile
+  { -- | Foreign source language expected by GHC.
+    spliceForeignFileLang :: !ForeignSrcLang
+  , -- | Source path as registered by TH.
+    spliceForeignFilePath :: !FilePath
+  }
+  deriving (Eq, Show)
+
+instance ToJSON SpliceForeignFile where
+  toJSON foreignFile =
+    object
+      [ "language" .= foreignSrcLangToStr (spliceForeignFileLang foreignFile)
+      , "path" .= spliceForeignFilePath foreignFile
+      ]
+
+instance FromJSON SpliceForeignFile where
+  parseJSON =
+    withObject "SpliceForeignFile" $ \obj -> do
+      rawLang <- obj .: "language"
+      foreignLang <-
+        case parseForeignSrcLang rawLang of
+          Right value -> pure value
+          Left err -> fail err
+      SpliceForeignFile foreignLang <$> obj .: "path"
+
+-- | Stable textual representation of GHC's foreign source language.
+foreignSrcLangToStr :: ForeignSrcLang -> String
+foreignSrcLangToStr = \case
+  LangC -> "c"
+  LangCxx -> "cxx"
+  LangObjc -> "objc"
+  LangObjcxx -> "objcxx"
+  LangAsm -> "asm"
+  LangJs -> "js"
+  RawObject -> "raw-object"
+
+-- | Parse the protocol representation back to GHC's foreign source language.
+parseForeignSrcLang :: String -> Either String ForeignSrcLang
+parseForeignSrcLang = \case
+  "c" -> Right LangC
+  "cxx" -> Right LangCxx
+  "objc" -> Right LangObjc
+  "objcxx" -> Right LangObjcxx
+  "asm" -> Right LangAsm
+  "js" -> Right LangJs
+  "raw-object" -> Right RawObject
+  raw -> Left ("unknown foreign source language: " <> raw)
+
 -- | Result of host-side splice evaluation plus effects to replay in cross GHC.
 data SpliceResult = SpliceResult
   { -- | Generated Haskell fragment parsed by the cross-side compiler.
     spliceResultHaskell :: !String
   , -- | Files registered through @addDependentFile@ while evaluating the splice.
     spliceResultDependentFiles :: ![FilePath]
+  , -- | Foreign files registered through @addForeignFilePath@.
+    spliceResultForeignFiles :: ![SpliceForeignFile]
   , -- | Diagnostics reported by host-side TH and replayed in cross GHC.
     spliceResultDiagnostics :: ![SpliceDiagnostic]
   }
@@ -83,6 +139,7 @@ instance ToJSON SpliceResult where
     object
       [ "generatedHaskell" .= spliceResultHaskell result
       , "dependentFiles" .= spliceResultDependentFiles result
+      , "foreignFiles" .= spliceResultForeignFiles result
       , "diagnostics" .= spliceResultDiagnostics result
       ]
 
@@ -92,6 +149,7 @@ instance FromJSON SpliceResult where
       SpliceResult
         <$> obj .: "generatedHaskell"
         <*> obj .: "dependentFiles"
+        <*> obj .:? "foreignFiles" .!= []
         <*> obj .:? "diagnostics" .!= []
 
 -- | 1-based source span for the splice as seen by the cross GHC process.
@@ -239,6 +297,7 @@ instance ToJSON SpliceResponse where
           , "status" .= ("ok" :: String)
           , "generatedHaskell" .= spliceResultHaskell spliceResult
           , "dependentFiles" .= spliceResultDependentFiles spliceResult
+          , "foreignFiles" .= spliceResultForeignFiles spliceResult
           , "diagnostics" .= spliceResultDiagnostics spliceResult
           ]
       SpliceError reqId message ->
@@ -259,6 +318,7 @@ instance FromJSON SpliceResponse where
             <$> ( SpliceResult
                     <$> obj .: "generatedHaskell"
                     <*> obj .: "dependentFiles"
+                    <*> obj .:? "foreignFiles" .!= []
                     <*> obj .:? "diagnostics" .!= []
                 )
         "error" -> SpliceError reqId <$> obj .: "message"

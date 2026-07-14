@@ -78,6 +78,7 @@ Fields:
   "status": "ok",
   "generatedHaskell": "42",
   "dependentFiles": [],
+  "foreignFiles": [],
   "diagnostics": []
 }
 ```
@@ -85,6 +86,22 @@ Fields:
 `dependentFiles` contains files registered by host-side Template Haskell through
 `addDependentFile`. The cross-side plugin must replay these into the cross GHC
 session.
+
+`foreignFiles` contains files registered by host-side Template Haskell through
+`addForeignFilePath`. The cross-side plugin replays these into the cross GHC
+session so the target-side build can compile/link them.
+
+Foreign file entry:
+
+```json
+{
+  "language": "c",
+  "path": "cbits/generated.c"
+}
+```
+
+`language` is one of `c`, `cxx`, `objc`, `objcxx`, `asm`, `js`, or
+`raw-object`.
 
 `diagnostics` contains diagnostics registered by host-side Template Haskell
 through `reportWarning` or `reportError`. In GHC 9.8.4 both operations are
@@ -110,6 +127,7 @@ Fields:
 - `generatedHaskell`: Haskell fragment to parse in the cross GHC process.
 - `dependentFiles`: files to register in the cross GHC session as TH
   dependencies.
+- `foreignFiles`: foreign files to register in the cross GHC session.
 - `diagnostics`: host-side TH diagnostics to replay in the cross GHC session.
 
 ## Error Response

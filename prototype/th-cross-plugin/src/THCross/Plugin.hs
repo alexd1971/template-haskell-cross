@@ -63,6 +63,7 @@ import System.Process
 import THCross.ParseFragment (parseDeclarationFragments, parseExpressionFragment)
 import THCross.Protocol
   ( SpliceDiagnostic (..)
+  , SpliceForeignFile (..)
   , SpliceResult (..)
   , SourceSpan (..)
   , SpliceKind (..)
@@ -70,6 +71,7 @@ import THCross.Protocol
   , SpliceResponse (..)
   , decodeResponseLine
   , encodeRequestLine
+  , foreignSrcLangToStr
   , sourceSpanKeyText
   , spliceKindToStr
   )
@@ -160,6 +162,7 @@ loggingMetaHook workerState mode request spliceExpr = do
           spliceResult <-
             requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
           replayDependentFiles (spliceResultDependentFiles spliceResult)
+          replayForeignFiles (spliceResultForeignFiles spliceResult)
           replayDiagnostics (spliceResultDiagnostics spliceResult)
           parseFragment (spliceResultHaskell spliceResult)
         _ ->
@@ -294,6 +297,30 @@ replayDependentFiles dependentFiles = do
     mapM_
       (\filePath -> putStrLn ("th-cross: dependent file " <> filePath))
       dependentFiles
+
+-- | Replay host-side @addForeignFilePath@ effects in the cross GHC session.
+replayForeignFiles :: [SpliceForeignFile] -> TcM ()
+replayForeignFiles foreignFiles = do
+  tcGblEnv <- getGblEnv
+  updTcRef (tcg_th_foreign_files tcGblEnv) (foreignFileTuples <>)
+  liftIO $
+    mapM_
+      ( \foreignFile ->
+          putStrLn
+            ( "th-cross: foreign file "
+                <> foreignSrcLangToStr (spliceForeignFileLang foreignFile)
+                <> " "
+                <> spliceForeignFilePath foreignFile
+            )
+      )
+      foreignFiles
+  where
+    foreignFileTuples =
+      map
+        ( \foreignFile ->
+            (spliceForeignFileLang foreignFile, spliceForeignFilePath foreignFile)
+        )
+        foreignFiles
 
 -- | Replay host-side @reportWarning@ and @reportError@ effects in cross GHC.
 replayDiagnostics :: [SpliceDiagnostic] -> TcM ()
