@@ -113,6 +113,15 @@ main = do
                 [ ("host-side TH warning", 1)
                 ]
             }
+          -- Confirms that runIO executes inside the host worker and that the
+          -- cross-side compiler only receives the generated expression.
+        , TestCase
+            { testName = "host runIO execution"
+            , testModulePath = "RunIO.hs"
+            , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences = []
+            , testStderrOccurrences = []
+            }
         ]
   forM_ testCases (runCase projectRoot fixturesDir)
 

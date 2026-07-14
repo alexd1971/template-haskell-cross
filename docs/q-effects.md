@@ -60,7 +60,7 @@ For correctness, every effect that changes GHC compilation state must either be:
 | `recover` | `qRecover` uses `tryTcDiscardingErrs`; recovered errors are discarded if the recovery branch is used. | Safe automatically inside host evaluation. | No replay needed for `recover` itself. Effects produced by the branch that actually runs still need their own classification. |
 | `getQ` | Reads module-local TH state from `tcg_th_state`. | Host-local, safe for host-evaluated splices in one module load. | No cross replay needed while all splices in the module are evaluated by the host worker. Document as unsupported for mixed host/cross TH execution. |
 | `putQ` | Writes module-local TH state into `tcg_th_state`. | Host-local, safe for host-evaluated splices in one module load. | Same as `getQ`. Whole-module host expansion preserves ordering-dependent `Q` state for captured results. |
-| `runIO` | Runs arbitrary `IO` in the host process. | Host-only effect. | The generated fragment reflects the returned value, but external side effects are not replayed. Users must call `addDependentFile` for file dependencies. Target-only IO assumptions are unsupported. |
+| `runIO` | Runs arbitrary `IO` in the host process. | Host-only effect, covered by integration test. | The generated fragment reflects the returned value, but external side effects are not replayed. Users must call `addDependentFile` for file dependencies. Target-only IO assumptions are unsupported. |
 
 ## MVP Policy
 
