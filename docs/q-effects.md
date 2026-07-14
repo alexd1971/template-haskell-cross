@@ -55,8 +55,8 @@ For correctness, every effect that changes GHC compilation state must either be:
 | `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Must be forwarded to cross GHC. | Worker response should include foreign files. Cross GHC must compile/link them for the target, not the host. Unsupported in MVP. |
 | `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Must be forwarded to cross GHC. | Unsupported in MVP. Later replay on the cross-side compilation session; plugin availability must be checked in the cross compiler environment. |
 | `addModFinalizer` | Stores a finalizer reference for later module-finalizer execution with the local environment. | Must be modeled explicitly or unsupported. | Unsupported in MVP. Host execution may run finalizers, but their resulting diagnostics/dependencies/state changes are not automatically visible to cross GHC. |
-| `reportWarning` | `qReport False` adds a diagnostic and continues. | Must be forwarded for user-visible correctness. | Worker response should include warnings with source spans/messages. MVP may only print host diagnostics, but that is not equivalent to GHC diagnostics. |
-| `reportError` | `qReport True` adds an error; the splice may continue unless it fails. | Must be forwarded as a cross-side compilation error. | Current host load failures become worker errors. Later preserve exact diagnostics instead of returning only a string. |
+| `reportWarning` | `qReport False` adds a diagnostic and continues. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError False message)`. | Forwarded to cross GHC in the prototype. | The worker response includes this TH diagnostic; the cross-side plugin replays it with `addDiagnostic`. |
+| `reportError` | `qReport True` adds an error; the splice may continue unless it fails. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError True message)`. | Partially forwarded. | The protocol can carry this TH diagnostic and the cross-side plugin replays it with `addErr`. If host GHC fails before a splice result is captured, the worker still returns a worker error string. |
 | `recover` | `qRecover` uses `tryTcDiscardingErrs`; recovered errors are discarded if the recovery branch is used. | Safe automatically inside host evaluation. | No replay needed for `recover` itself. Effects produced by the branch that actually runs still need their own classification. |
 | `getQ` | Reads module-local TH state from `tcg_th_state`. | Host-local, safe for host-evaluated splices in one module load. | No cross replay needed while all splices in the module are evaluated by the host worker. Document as unsupported for mixed host/cross TH execution. |
 | `putQ` | Writes module-local TH state into `tcg_th_state`. | Host-local, safe for host-evaluated splices in one module load. | Same as `getQ`. Whole-module host expansion preserves ordering-dependent `Q` state for captured results. |
@@ -68,7 +68,7 @@ The current MVP should support:
 
 ```text
 primary generated Haskell fragment
-reportError as worker failure
+reportError as replayed diagnostic when the host worker captures a splice result
 recover behavior inside host execution
 getQ/putQ inside one whole-module host load
 runIO execution on the host

@@ -6,7 +6,8 @@
 -- AST values. The receiving compiler parses that text locally into its own
 -- @GhcPs@ AST.
 module THCross.Protocol
-  ( SpliceResult (..)
+  ( SpliceDiagnostic (..)
+  , SpliceResult (..)
   , SourceSpan (..)
   , SpliceKind (..)
   , SpliceRequest (..)
@@ -27,10 +28,44 @@ import Data.Aeson
   , object
   , withObject
   , (.:)
+  , (.:?)
+  , (.!=)
   , (.=)
   )
 import qualified Data.ByteString.Lazy as BL
 import THCross.SpliceKey (SpliceKey)
+
+-- | Diagnostic produced by host-side TH through @reportWarning@ or
+-- @reportError@.
+data SpliceDiagnostic = SpliceDiagnostic
+  { -- | True for @reportError@, false for @reportWarning@.
+    spliceDiagnosticIsError :: !Bool
+  , -- | User-supplied diagnostic message.
+    spliceDiagnosticMessage :: !String
+  }
+  deriving (Eq, Show)
+
+instance ToJSON SpliceDiagnostic where
+  toJSON diagnostic =
+    object
+      [ "severity" .= diagnosticSeverity diagnostic
+      , "message" .= spliceDiagnosticMessage diagnostic
+      ]
+    where
+      diagnosticSeverity value
+        | spliceDiagnosticIsError value = "error" :: String
+        | otherwise = "warning"
+
+instance FromJSON SpliceDiagnostic where
+  parseJSON =
+    withObject "SpliceDiagnostic" $ \obj -> do
+      severity <- obj .: "severity"
+      isError <-
+        case severity :: String of
+          "error" -> pure True
+          "warning" -> pure False
+          raw -> fail ("unknown diagnostic severity: " <> raw)
+      SpliceDiagnostic isError <$> obj .: "message"
 
 -- | Result of host-side splice evaluation plus effects to replay in cross GHC.
 data SpliceResult = SpliceResult
@@ -38,6 +73,8 @@ data SpliceResult = SpliceResult
     spliceResultHaskell :: !String
   , -- | Files registered through @addDependentFile@ while evaluating the splice.
     spliceResultDependentFiles :: ![FilePath]
+  , -- | Diagnostics reported by host-side TH and replayed in cross GHC.
+    spliceResultDiagnostics :: ![SpliceDiagnostic]
   }
   deriving (Eq, Show)
 
@@ -46,6 +83,7 @@ instance ToJSON SpliceResult where
     object
       [ "generatedHaskell" .= spliceResultHaskell result
       , "dependentFiles" .= spliceResultDependentFiles result
+      , "diagnostics" .= spliceResultDiagnostics result
       ]
 
 instance FromJSON SpliceResult where
@@ -54,6 +92,7 @@ instance FromJSON SpliceResult where
       SpliceResult
         <$> obj .: "generatedHaskell"
         <*> obj .: "dependentFiles"
+        <*> obj .:? "diagnostics" .!= []
 
 -- | 1-based source span for the splice as seen by the cross GHC process.
 data SourceSpan = SourceSpan
@@ -200,6 +239,7 @@ instance ToJSON SpliceResponse where
           , "status" .= ("ok" :: String)
           , "generatedHaskell" .= spliceResultHaskell spliceResult
           , "dependentFiles" .= spliceResultDependentFiles spliceResult
+          , "diagnostics" .= spliceResultDiagnostics spliceResult
           ]
       SpliceError reqId message ->
         object
@@ -219,6 +259,7 @@ instance FromJSON SpliceResponse where
             <$> ( SpliceResult
                     <$> obj .: "generatedHaskell"
                     <*> obj .: "dependentFiles"
+                    <*> obj .:? "diagnostics" .!= []
                 )
         "error" -> SpliceError reqId <$> obj .: "message"
         _ -> fail ("unknown response status: " <> status)

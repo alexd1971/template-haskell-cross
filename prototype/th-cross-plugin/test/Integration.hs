@@ -101,6 +101,18 @@ main = do
                 ]
             , testStderrOccurrences = []
             }
+          -- Verifies that host-side reportWarning effects are replayed as
+          -- cross-side GHC diagnostics instead of being visible only in the
+          -- worker process.
+        , TestCase
+            { testName = "TH warning propagation"
+            , testModulePath = "ReportWarning.hs"
+            , testPluginOptions = workerPluginOptions workerPath
+            , testStdoutOccurrences = []
+            , testStderrOccurrences =
+                [ ("host-side TH warning", 1)
+                ]
+            }
         ]
   forM_ testCases (runCase projectRoot fixturesDir)
 

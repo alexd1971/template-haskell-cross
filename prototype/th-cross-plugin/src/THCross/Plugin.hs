@@ -32,8 +32,9 @@ import GHC.Data.FastString (unpackFS)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Settings.Config (cProjectVersion)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
+import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
 import GHC.Tc.Types (TcGblEnv (..), TcM)
-import GHC.Tc.Utils.Monad (getGblEnv, liftIO, updTcRef)
+import GHC.Tc.Utils.Monad (addDiagnostic, addErr, getGblEnv, liftIO, updTcRef)
 import GHC.Types.Meta (MetaHook, MetaRequest (..))
 import GHC.Types.SrcLoc
   ( SrcSpan (..)
@@ -61,7 +62,8 @@ import System.Process
   )
 import THCross.ParseFragment (parseDeclarationFragments, parseExpressionFragment)
 import THCross.Protocol
-  ( SpliceResult (..)
+  ( SpliceDiagnostic (..)
+  , SpliceResult (..)
   , SourceSpan (..)
   , SpliceKind (..)
   , SpliceRequest (..)
@@ -158,6 +160,7 @@ loggingMetaHook workerState mode request spliceExpr = do
           spliceResult <-
             requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
           replayDependentFiles (spliceResultDependentFiles spliceResult)
+          replayDiagnostics (spliceResultDiagnostics spliceResult)
           parseFragment (spliceResultHaskell spliceResult)
         _ ->
           fail "evaluateWorkerSplice called outside worker mode"
@@ -291,6 +294,22 @@ replayDependentFiles dependentFiles = do
     mapM_
       (\filePath -> putStrLn ("th-cross: dependent file " <> filePath))
       dependentFiles
+
+-- | Replay host-side @reportWarning@ and @reportError@ effects in cross GHC.
+replayDiagnostics :: [SpliceDiagnostic] -> TcM ()
+replayDiagnostics =
+  mapM_ replayDiagnostic
+  where
+    replayDiagnostic diagnostic =
+      let message =
+            TcRnTHError
+              ( ReportCustomQuasiError
+                  (spliceDiagnosticIsError diagnostic)
+                  (spliceDiagnosticMessage diagnostic)
+              )
+       in if spliceDiagnosticIsError diagnostic
+            then addErr message
+            else addDiagnostic message
 
 -- | Run one JSON-lines request/response exchange with the worker executable.
 --

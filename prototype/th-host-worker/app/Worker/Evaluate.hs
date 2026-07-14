@@ -10,7 +10,7 @@ module Worker.Evaluate
 import Control.Exception (SomeException, catch, displayException)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import System.Directory (createDirectoryIfMissing)
 import System.IO (hPutStrLn, stderr)
 import GHC
@@ -26,6 +26,7 @@ import GHC
   , setSessionDynFlags
   , setTargets
   )
+import GHC.Data.Bag (bagToList)
 import GHC.Driver.Env.Types (HscEnv (..))
 import GHC.Driver.Hooks (Hooks (..))
 import GHC.Driver.Session
@@ -39,8 +40,16 @@ import GHC.Driver.Session
 import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
+import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
 import GHC.Tc.Types (TcGblEnv (..), TcM)
-import GHC.Tc.Utils.Monad (getGblEnv, liftIO, readTcRef)
+import GHC.Tc.Utils.Monad (getErrsVar, getGblEnv, liftIO, readTcRef, writeTcRef)
+import GHC.Types.Error
+  ( Messages
+  , MsgEnvelope (errMsgDiagnostic)
+  , emptyMessages
+  , getMessages
+  , unionMessages
+  )
 import GHC.Types.Meta
   ( MetaHook
   , MetaRequest (..)
@@ -65,7 +74,8 @@ import GHC.Utils.Outputable
 import System.FilePath ((</>), takeDirectory)
 import System.Process (readProcess)
 import THCross.Protocol
-  ( SpliceResult (..)
+  ( SpliceDiagnostic (..)
+  , SpliceResult (..)
   , SourceSpan (..)
   , SpliceKind (..)
   , SpliceRequest (..)
@@ -239,22 +249,52 @@ captureMetaHook capturesRef dependentFilesRef previousRunMeta request spliceExpr
     runMeta = fromMaybe defaultRunMeta previousRunMeta
 
     captureSpliceResult spliceKind evaluateSplice renderExpanded = do
-      expanded <- evaluateSplice spliceExpr
+      (expanded, diagnostics) <-
+        evaluateWithIsolatedDiagnostics (evaluateSplice spliceExpr)
       renderedExpansion <- renderExpanded expanded
       spliceKey <- mkCapturedSpliceKey spliceKind spliceExpr
       dependentFiles <- getDependentFiles
       liftIO $ do
         writeIORef dependentFilesRef dependentFiles
-        modifyIORef' capturesRef (Map.insert spliceKey (mkSpliceResult renderedExpansion))
+        modifyIORef' capturesRef (Map.insert spliceKey (mkSpliceResult renderedExpansion diagnostics))
       pure expanded
 
 -- | Construct a captured splice result before module-level effects are attached.
-mkSpliceResult :: String -> SpliceResult
-mkSpliceResult text =
+mkSpliceResult :: String -> [SpliceDiagnostic] -> SpliceResult
+mkSpliceResult renderedExpansion diagnostics =
   SpliceResult
-    { spliceResultHaskell = text
+    { spliceResultHaskell = renderedExpansion
     , spliceResultDependentFiles = []
+    , spliceResultDiagnostics = diagnostics
     }
+
+-- | Evaluate one splice while separately recording TH diagnostics.
+--
+-- Host GHC stores @reportWarning@ and @reportError@ in the current 'TcM'
+-- message bag. Temporarily clearing that bag gives us the messages produced by
+-- this splice alone; restoring the union afterwards keeps normal host
+-- compilation semantics intact.
+evaluateWithIsolatedDiagnostics :: TcM a -> TcM (a, [SpliceDiagnostic])
+evaluateWithIsolatedDiagnostics action = do
+  errsVar <- getErrsVar
+  previousMessages <- readTcRef errsVar
+  writeTcRef errsVar emptyMessages
+  result <- action
+  spliceMessages <- readTcRef errsVar
+  writeTcRef errsVar (spliceMessages `unionMessages` previousMessages)
+  pure (result, extractTHDiagnostics spliceMessages)
+
+-- | Keep only diagnostics explicitly emitted by Template Haskell @report*@.
+extractTHDiagnostics :: Messages TcRnMessage -> [SpliceDiagnostic]
+extractTHDiagnostics messages =
+  mapMaybe extractTHDiagnostic (bagToList (getMessages messages))
+  where
+    extractTHDiagnostic message =
+      case errMsgDiagnostic message of
+        TcRnTHError (ReportCustomQuasiError isError text) ->
+          Just (SpliceDiagnostic isError text)
+        _ ->
+          Nothing
 
 -- | Read files registered through @addDependentFile@ in the host GHC session.
 getDependentFiles :: TcM [FilePath]

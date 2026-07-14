@@ -77,13 +77,31 @@ Fields:
   "requestId": "123",
   "status": "ok",
   "generatedHaskell": "42",
-  "dependentFiles": []
+  "dependentFiles": [],
+  "diagnostics": []
 }
 ```
 
 `dependentFiles` contains files registered by host-side Template Haskell through
 `addDependentFile`. The cross-side plugin must replay these into the cross GHC
 session.
+
+`diagnostics` contains diagnostics registered by host-side Template Haskell
+through `reportWarning` or `reportError`. In GHC 9.8.4 both operations are
+represented internally as `TcRnTHError (ReportCustomQuasiError isError message)`;
+the `isError` flag distinguishes warning from error. The cross-side plugin
+replays those diagnostics into the current GHC session.
+
+Diagnostic entry:
+
+```json
+{
+  "severity": "warning",
+  "message": "generated code uses a fallback"
+}
+```
+
+`severity` is either `warning` for `reportWarning` or `error` for `reportError`.
 
 Fields:
 
@@ -92,6 +110,7 @@ Fields:
 - `generatedHaskell`: Haskell fragment to parse in the cross GHC process.
 - `dependentFiles`: files to register in the cross GHC session as TH
   dependencies.
+- `diagnostics`: host-side TH diagnostics to replay in the cross GHC session.
 
 ## Error Response
 
