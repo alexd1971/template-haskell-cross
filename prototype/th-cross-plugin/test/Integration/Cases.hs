@@ -162,6 +162,19 @@ addTopDeclsTests testEnv =
             compileNatively testEnv "AddTopDeclsAnnotation.hs" expectSuccess
         ]
     , testGroup
+        "typed expression splice"
+        [ testCase "plugin" $
+            compileWithPlugin
+              testEnv
+              "AddTopDeclsTypedSplice.hs"
+              expectSuccess
+                { expectedStdout =
+                    [("th-cross: added top decls 1", 1)]
+                }
+        , testCase "native" $
+            compileNatively testEnv "AddTopDeclsTypedSplice.hs" expectSuccess
+        ]
+    , testGroup
         "invalid declaration"
         [ testCase "plugin" $
             compileWithPlugin

@@ -291,6 +291,8 @@ Integration coverage now includes:
   declarations from the same pre-splice group;
 - success: annotation declarations (`AnnD`) added through `addTopDecls`, using
   same-GHC-version `MetaAW`/annotation-wrapper forwarding;
+- success: top-level typed expression splice using `unsafeCodeCoerce`, confirming
+  GHC 9.8.4 routes this case through the existing `MetaE` hook path;
 - expected failure: invalid declaration passed to `addTopDecls`;
 - expected failure: declaration added through `addTopDecls` contains a normal
   typechecking error.
@@ -320,8 +322,8 @@ reference is already an exact `Name`. A normal source `RdrName` is not resolved
 through `tcg_th_topnames`. This means failing such a test would not demonstrate a
 plugin regression unless a corresponding native GHC compilation succeeds.
 
-The smoke fixture is intentionally based on a native-GHC-valid shape accepted by
-GHC 9.8.4:
+The primary smoke fixture is intentionally based on a native-GHC-valid shape
+accepted by GHC 9.8.4:
 
 ```haskell
 {-# LANGUAGE ForeignFunctionInterface #-}
@@ -439,9 +441,9 @@ Continue with Strategy A, because it is the only route that can plausibly cover
 consumer path in `tc_rn_src_decls` confirms that replaying into
 `tcg_th_topdecls` happens early enough for the current group. The current
 implementation is still subset support, not full semantic support. Before
-declaring full support, add native-GHC-valid tests for typed splices and
-exact-name-heavy cases, and decide whether `tcg_th_topnames` needs explicit
-protocol support.
+declaring full support, add native-GHC-valid tests for type/pattern splice
+contexts and exact-name-heavy cases, and decide whether `tcg_th_topnames` needs
+explicit protocol support.
 
 Keep Strategy B only as a fallback for declaration-splice-specific issues. It is
 less likely to become the main path now that Strategy A has a working
