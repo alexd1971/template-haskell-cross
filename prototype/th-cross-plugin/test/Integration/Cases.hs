@@ -85,6 +85,14 @@ testTrees testEnv =
               { expectedStdout =
                   [("th-cross: foreign file c cbits/th_foreign_file_path.c", 1)]
               }
+      , testCase "foreign source propagation" $
+          compileWithPlugin
+            testEnv
+            "AddForeignSource.hs"
+            expectSuccess
+              { expectedStdout =
+                  [("th-cross: foreign file c ", 1)]
+              }
       ]
   , addTopDeclsTests testEnv
   ]

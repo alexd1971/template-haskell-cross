@@ -51,7 +51,7 @@ For correctness, every effect that changes GHC compilation state must either be:
 | `addDependentFile` | `qAddDependentFile` prepends the path to `tcg_dependent_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `dependentFiles :: [FilePath]`; the cross-side plugin appends them to `tcg_dependent_files`. |
 | `addTempFile` | `qAddTempFile` allocates a GHC-session temp file through `newTempName`. | Host-only effect, covered by smoke test. | Do not replay temp file allocation directly. If the file is later passed to `addForeignFilePath` or `addDependentFile`, propagate that higher-level effect. |
 | `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Partially forwarded through Strategy A. | The worker response includes textual `addedTopDecls`; the cross-side plugin parses and appends them to `tcg_th_topdecls`. `AnnD` is covered by same-GHC-version annotation-wrapper forwarding. Value-binding visibility and `tcg_th_topnames` semantics need more investigation. |
-| `addForeignFile` | Deprecated wrapper around foreign source emission. | Must be forwarded through `addForeignFilePath` or unsupported. | Treat via `addForeignSource`/`addForeignFilePath`. Direct string source emission is still unsupported in MVP. |
+| `addForeignFile` / `addForeignSource` | `addForeignFile` is a deprecated alias for `addForeignSource`; `addForeignSource` writes source text to a temp file and calls `addForeignFilePath`. | Forwarded through existing `addForeignFilePath` propagation. | Covered by an integration test. The generated temp file path is host-side but is passed to cross GHC as a foreign file path. |
 | `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `foreignFiles`; the cross-side plugin appends them to `tcg_th_foreign_files`, so the target-side build owns compilation/linking. |
 | `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Unsupported in MVP; must be forwarded before production use. | Future protocol can carry `corePlugins :: [String]`; cross-side replay must check that the plugin is available to the cross compiler environment. |
 | `addModFinalizer` | Stores a finalizer reference for later module-finalizer execution with the local environment. | Must be modeled explicitly or unsupported. | Unsupported in MVP. Host execution may run finalizers, but their resulting diagnostics/dependencies/state changes are not automatically visible to cross GHC. |
@@ -80,7 +80,6 @@ addTopDecls smoke propagation to the cross GHC session
 The current MVP should explicitly not support:
 
 ```text
-addForeignFile direct source emission
 addCorePlugin
 addModFinalizer
 complete diagnostic replay
@@ -91,6 +90,7 @@ Implemented in the prototype:
 
 ```text
 addDependentFile propagation
+addForeignSource/addForeignFile propagation through generated foreign file paths
 addForeignFilePath propagation
 addTopDecls smoke propagation
 reportWarning/reportError diagnostics propagation
@@ -468,6 +468,98 @@ fragments independently, module-local `Q` state will not be preserved.
 `addTempFile` is not a stable wire effect. The temp path is meaningful to the
 host GHC session and may be cleaned up by GHC. Any durable consequence must be
 represented through another effect, such as `addForeignFilePath`.
+
+## `addForeignSource` / `addForeignFile` Investigation
+
+GHC 9.8.4 public API:
+
+```haskell
+addForeignFile :: ForeignSrcLang -> String -> Q ()
+addForeignSource :: ForeignSrcLang -> String -> Q ()
+addForeignFilePath :: ForeignSrcLang -> FilePath -> Q ()
+```
+
+Source:
+
+- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`,
+  `addForeignFile`, around lines 809-813
+- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`,
+  `addForeignSource`, around lines 832-844
+- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`,
+  `addForeignFilePath`, around lines 852-853
+- `compiler/GHC/Tc/Gen/Splice.hs`, `qAddForeignFilePath`, around lines
+  1470-1472
+- `compiler/GHC/Tc/Types.hs`, `tcg_th_foreign_files`, around line 562
+
+In GHC 9.8.4, `addForeignFile` is deprecated:
+
+```text
+Use 'Language.Haskell.TH.Syntax.addForeignSource' instead
+```
+
+and is implemented as:
+
+```haskell
+addForeignFile = addForeignSource
+```
+
+`addForeignSource` is not a separate compiler-state effect. It reduces source
+text emission to temp-file creation plus path registration:
+
+```haskell
+path <- addTempFile suffix
+runIO (writeFile path src)
+addForeignFilePath lang path
+```
+
+Then `qAddForeignFilePath` records the path in:
+
+```haskell
+tcg_th_foreign_files :: TcRef [(ForeignSrcLang, FilePath)]
+```
+
+with:
+
+```haskell
+updTcRef var ((lang, fp):)
+```
+
+### Prototype Behavior
+
+The prototype already forwards `tcg_th_foreign_files` through the worker
+response as:
+
+```json
+{
+  "foreignFiles": [
+    {
+      "language": "c",
+      "path": "..."
+    }
+  ]
+}
+```
+
+and replays them into cross-side `tcg_th_foreign_files`.
+
+Because `addForeignSource` eventually calls `addForeignFilePath`, it is covered
+by the same mechanism. The integration suite includes a smoke test where
+host-side TH calls `addForeignSource LangC ...` and the cross-side plugin logs a
+replayed `foreign file c ...` entry.
+
+### MVP Decision
+
+`addForeignSource` and deprecated `addForeignFile` are considered supported to
+the same extent as `addForeignFilePath`.
+
+Important caveat:
+
+- the source text is written to a host-side temp file;
+- the cross-side GHC receives only the generated file path;
+- the file must still exist when cross GHC compiles/links foreign files;
+- longer-term builds should ensure these generated files live under a durable
+  worker/module build directory, not a temp location that can disappear too
+  early.
 
 ## `addModFinalizer` Investigation
 
