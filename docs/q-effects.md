@@ -469,7 +469,87 @@ fragments independently, module-local `Q` state will not be preserved.
 host GHC session and may be cleaned up by GHC. Any durable consequence must be
 represented through another effect, such as `addForeignFilePath`.
 
-`addModFinalizer` is hard to support with a textual wire format because the
-effect is a delayed `Q ()` action, not a generated Haskell fragment. Supporting
-it requires host-side execution plus explicit forwarding of any finalizer
-effects that should be visible to the cross compilation.
+## `addModFinalizer` Investigation
+
+GHC 9.8.4 public API:
+
+```haskell
+addModFinalizer :: Q () -> Q ()
+```
+
+Source:
+
+- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`, around lines
+  861-862
+- `compiler/GHC/Tc/Gen/Splice.hs`, `qAddModFinalizer`, around lines 1474-1477
+- `compiler/GHC/Tc/Gen/Splice.hs`, `addModFinalizerRef`, around lines
+  1648-1657
+- `compiler/GHC/Tc/Gen/Splice.hs`, `runRemoteModFinalizers`, around lines
+  1056-1060
+- `compiler/GHC/Tc/Types.hs`, `tcg_th_modfinalizers`, around line 568
+
+GHC stores module finalizers as delayed `Q ()` actions, not as Haskell source
+fragments:
+
+```haskell
+tcg_th_modfinalizers :: TcRef [(TcLclEnv, ThModFinalizers)]
+```
+
+and:
+
+```haskell
+newtype ThModFinalizers = ThModFinalizers [ForeignRef (Q ())]
+```
+
+In the `Quasi TcM` instance, `qAddModFinalizer` creates a remote reference to
+the `Q ()` action and records it with `addModFinalizerRef`. `addModFinalizerRef`
+only works while GHC is collecting finalizers for a running splice; otherwise it
+panics with:
+
+```text
+addModFinalizer was called when no finalizers were collected
+```
+
+Typed splices have an extra staging detail. GHC's note "Collecting modFinalizers
+in typed splices" says finalizers are first collected in the local environment
+and then moved to the global finalizer list with the current local environment.
+
+### Prototype Behavior
+
+The current host worker loads the module with native GHC. That means host GHC
+may execute module finalizers during the host-side load.
+
+However, this is not a correct cross-side implementation:
+
+- the protocol does not carry finalizer actions;
+- the protocol does not carry a post-finalizer effects delta;
+- per-splice diagnostics/top declarations are captured before module finalizers
+  run;
+- dependent/foreign file effects are copied from worker-side `IORef`s that are
+  updated during splice capture, not by reading finalizer effects after `load`;
+- worker stderr is inherited by the cross GHC process, so a host-side finalizer
+  warning might be visible in logs, but that is not the same as replaying a
+  cross-side GHC diagnostic.
+
+### MVP Decision
+
+`addModFinalizer` remains unsupported in the MVP.
+
+Do not treat host execution of finalizers as support. It is host-only behavior
+unless the worker records finalizer-produced effects and the cross-side plugin
+replays them explicitly.
+
+Possible future implementation:
+
+1. Let host GHC execute finalizers as part of normal module loading.
+2. Capture a module-level post-finalizer effects delta:
+   diagnostics, dependent files, foreign files, top declarations, and possibly
+   core plugins.
+3. Attach those effects to the whole-module expansion cache rather than to one
+   arbitrary splice.
+4. Replay the module-finalizer effects once on the cross side, after all
+   required splice results for the module have been consumed.
+
+This requires careful ordering. Replaying finalizer effects too early could
+change normal GHC staging semantics; replaying them per splice would duplicate
+effects.
