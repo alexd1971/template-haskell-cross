@@ -149,6 +149,19 @@ addTopDeclsTests testEnv =
             compileNatively testEnv "AddTopDeclsOrdering.hs" expectSuccess
         ]
     , testGroup
+        "annotation declaration"
+        [ testCase "plugin" $
+            compileWithPlugin
+              testEnv
+              "AddTopDeclsAnnotation.hs"
+              expectSuccess
+                { expectedStdout =
+                    [("th-cross: added top decls 1", 1)]
+                }
+        , testCase "native" $
+            compileNatively testEnv "AddTopDeclsAnnotation.hs" expectSuccess
+        ]
+    , testGroup
         "invalid declaration"
         [ testCase "plugin" $
             compileWithPlugin

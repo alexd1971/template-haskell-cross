@@ -50,7 +50,7 @@ For correctness, every effect that changes GHC compilation state must either be:
 | --- | --- | --- | --- |
 | `addDependentFile` | `qAddDependentFile` prepends the path to `tcg_dependent_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `dependentFiles :: [FilePath]`; the cross-side plugin appends them to `tcg_dependent_files`. |
 | `addTempFile` | `qAddTempFile` allocates a GHC-session temp file through `newTempName`. | Host-only effect, covered by smoke test. | Do not replay temp file allocation directly. If the file is later passed to `addForeignFilePath` or `addDependentFile`, propagate that higher-level effect. |
-| `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Partially forwarded through Strategy A. | The worker response includes textual `addedTopDecls`; the cross-side plugin parses and appends them to `tcg_th_topdecls`. Covered by a smoke test using a foreign import. Value-binding visibility and `tcg_th_topnames` semantics need more investigation. |
+| `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Partially forwarded through Strategy A. | The worker response includes textual `addedTopDecls`; the cross-side plugin parses and appends them to `tcg_th_topdecls`. `AnnD` is covered by same-GHC-version annotation-wrapper forwarding. Value-binding visibility and `tcg_th_topnames` semantics need more investigation. |
 | `addForeignFile` | Deprecated wrapper around foreign source emission. | Must be forwarded through `addForeignFilePath` or unsupported. | Treat via `addForeignSource`/`addForeignFilePath`. Direct string source emission is still unsupported in MVP. |
 | `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `foreignFiles`; the cross-side plugin appends them to `tcg_th_foreign_files`, so the target-side build owns compilation/linking. |
 | `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Must be forwarded to cross GHC. | Unsupported in MVP. Later replay on the cross-side compilation session; plugin availability must be checked in the cross compiler environment. |
@@ -112,6 +112,7 @@ For `addDependentFile`:
   "requestId": "123",
   "status": "ok",
   "generatedHaskell": "42",
+  "annotationWrapper": null,
   "dependentFiles": [
     "/absolute/path/schema.json"
   ],
@@ -288,6 +289,8 @@ Integration coverage now includes:
 - success: multiple splices in one module each call `addTopDecls`;
 - success: declarations added through `addTopDecls` can refer to source
   declarations from the same pre-splice group;
+- success: annotation declarations (`AnnD`) added through `addTopDecls`, using
+  same-GHC-version `MetaAW`/annotation-wrapper forwarding;
 - expected failure: invalid declaration passed to `addTopDecls`;
 - expected failure: declaration added through `addTopDecls` contains a normal
   typechecking error.
@@ -295,13 +298,13 @@ Integration coverage now includes:
   upstream `T10638`.
 - native GHC control cases for the same success/failure fixtures.
 
-Attempted but not counted as supported:
+Annotation-wrapper caveat:
 
-- `AnnD` is accepted by `qAddTopDecls`, but a replayed annotation declaration
-  triggers a later annotation-wrapper splice. The current worker mode supports
-  only expression and declaration splices, so `AnnD` requires additional
-  `MetaAW`/annotation-wrapper support before it can be included in the supported
-  subset.
+- Replayed `AnnD` declarations trigger a later `MetaAW` request. The prototype
+  handles that request by returning a binary-encoded GHC `Serialized` payload
+  captured by the host worker.
+- This is intentionally same-GHC-version support. It is not a stable textual
+  cross-version wire format like `generatedHaskell` or `addedTopDecls`.
 
 Important confirmed limitation:
 
@@ -436,9 +439,9 @@ Continue with Strategy A, because it is the only route that can plausibly cover
 consumer path in `tc_rn_src_decls` confirms that replaying into
 `tcg_th_topdecls` happens early enough for the current group. The current
 implementation is still subset support, not full semantic support. Before
-declaring full support, add native-GHC-valid tests for annotations, typed
-splices, and exact-name-heavy cases, and decide whether `tcg_th_topnames` needs
-explicit protocol support.
+declaring full support, add native-GHC-valid tests for typed splices and
+exact-name-heavy cases, and decide whether `tcg_th_topnames` needs explicit
+protocol support.
 
 Keep Strategy B only as a fallback for declaration-splice-specific issues. It is
 less likely to become the main path now that Strategy A has a working

@@ -17,6 +17,8 @@ import Control.Concurrent.MVar
   , newMVar
   )
 import Control.Exception (IOException, try)
+import Data.Binary (decodeOrFail)
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.List (stripPrefix)
 import Data.Maybe (listToMaybe, mapMaybe)
@@ -30,6 +32,7 @@ import GHC.Driver.Plugins
   )
 import GHC.Data.FastString (unpackFS)
 import GHC.Parser.Annotation (getLocA)
+import GHC.Serialized (Serialized)
 import GHC.Settings.Config (cProjectVersion)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
 import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
@@ -46,6 +49,7 @@ import GHC.Types.SrcLoc
   )
 import GHC.Unit.Module (moduleName, moduleNameString)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
+import GHCi.TH.Binary ()
 import System.IO
   ( Handle
   , hFlush
@@ -135,10 +139,15 @@ loggingMetaHook workerState mode request spliceExpr = do
           generated <-
             evaluateWorkerSplice tcGblEnv parseDeclarationFragments
           pure (wrap generated)
+    MetaAW wrap
+      | WorkerMode{} <- mode -> do
+          annotationWrapper <-
+            evaluateWorkerAnnotationWrapper tcGblEnv
+          pure (wrap annotationWrapper)
     _
       | WorkerMode{} <- mode -> do
           let err =
-                "worker mode currently supports only expression and declaration splices; got "
+                "worker mode currently supports only expression, declaration, and annotation-wrapper splices; got "
                   <> spliceKindName
           liftIO $ putStrLn ("unsupported-splice-kind: " <> err)
           fail err
@@ -168,6 +177,33 @@ loggingMetaHook workerState mode request spliceExpr = do
           parseFragment (spliceResultHaskell spliceResult)
         _ ->
           fail "evaluateWorkerSplice called outside worker mode"
+
+    evaluateWorkerAnnotationWrapper tcGblEnv =
+      case mode of
+        WorkerMode workerPath -> do
+          spliceResult <-
+            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+          replayDependentFiles (spliceResultDependentFiles spliceResult)
+          replayForeignFiles (spliceResultForeignFiles spliceResult)
+          replayAddedTopDecls (spliceResultAddedTopDecls spliceResult)
+          replayDiagnostics (spliceResultDiagnostics spliceResult)
+          decodeAnnotationWrapper spliceResult
+        _ ->
+          fail "evaluateWorkerAnnotationWrapper called outside worker mode"
+
+-- | Decode a same-version binary 'Serialized' annotation wrapper returned by
+-- the host worker.
+decodeAnnotationWrapper :: SpliceResult -> TcM Serialized
+decodeAnnotationWrapper spliceResult =
+  case spliceResultAnnotationWrapper spliceResult of
+    Nothing ->
+      fail "TH host worker did not return an annotation wrapper payload"
+    Just bytes ->
+      case decodeOrFail (LBS.pack bytes) of
+        Left (_, _, err) ->
+          fail ("TH host worker returned invalid annotation wrapper payload: " <> err)
+        Right (_, _, serialized) ->
+          pure serialized
 
 -- | Runtime behavior selected by plugin options.
 data PluginMode

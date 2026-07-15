@@ -37,6 +37,7 @@ import Data.Aeson
   )
 import qualified Data.ByteString.Lazy as BL
 import GHC.Tc.Types (ForeignSrcLang (..))
+import Data.Word (Word8)
 import THCross.SpliceKey (SpliceKey)
 
 -- | Diagnostic produced by host-side TH through @reportWarning@ or
@@ -125,6 +126,8 @@ parseForeignSrcLang = \case
 data SpliceResult = SpliceResult
   { -- | Generated Haskell fragment parsed by the cross-side compiler.
     spliceResultHaskell :: !String
+  , -- | Binary-encoded 'GHC.Serialized.Serialized' for annotation wrappers.
+    spliceResultAnnotationWrapper :: !(Maybe [Word8])
   , -- | Files registered through @addDependentFile@ while evaluating the splice.
     spliceResultDependentFiles :: ![FilePath]
   , -- | Foreign files registered through @addForeignFilePath@.
@@ -140,6 +143,7 @@ instance ToJSON SpliceResult where
   toJSON result =
     object
       [ "generatedHaskell" .= spliceResultHaskell result
+      , "annotationWrapper" .= spliceResultAnnotationWrapper result
       , "dependentFiles" .= spliceResultDependentFiles result
       , "foreignFiles" .= spliceResultForeignFiles result
       , "addedTopDecls" .= spliceResultAddedTopDecls result
@@ -151,6 +155,7 @@ instance FromJSON SpliceResult where
     withObject "SpliceResult" $ \obj ->
       SpliceResult
         <$> obj .: "generatedHaskell"
+        <*> obj .:? "annotationWrapper"
         <*> obj .: "dependentFiles"
         <*> obj .:? "foreignFiles" .!= []
         <*> obj .:? "addedTopDecls" .!= ""
@@ -300,6 +305,7 @@ instance ToJSON SpliceResponse where
           [ "requestId" .= reqId
           , "status" .= ("ok" :: String)
           , "generatedHaskell" .= spliceResultHaskell spliceResult
+          , "annotationWrapper" .= spliceResultAnnotationWrapper spliceResult
           , "dependentFiles" .= spliceResultDependentFiles spliceResult
           , "foreignFiles" .= spliceResultForeignFiles spliceResult
           , "addedTopDecls" .= spliceResultAddedTopDecls spliceResult
@@ -322,6 +328,7 @@ instance FromJSON SpliceResponse where
           SpliceOk reqId
             <$> ( SpliceResult
                     <$> obj .: "generatedHaskell"
+                    <*> obj .:? "annotationWrapper"
                     <*> obj .: "dependentFiles"
                     <*> obj .:? "foreignFiles" .!= []
                     <*> obj .:? "addedTopDecls" .!= ""

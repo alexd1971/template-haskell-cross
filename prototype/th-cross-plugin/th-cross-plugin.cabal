@@ -15,8 +15,11 @@ library
   build-depends:
       aeson
     , base >= 4.19 && < 4.20
+    , binary
     , bytestring
     , ghc == 9.8.4
+    , ghc-boot == 9.8.4
+    , ghci
     , process
   ghc-options:
       -Wall

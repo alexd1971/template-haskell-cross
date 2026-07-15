@@ -59,9 +59,9 @@ handleLine cache line =
 
 -- | Dispatch by splice kind.
 --
--- The prototype currently evaluates expression and declaration splices. Type,
--- pattern, and annotation-wrapper splices stay unsupported until the parser and
--- worker both handle their result shapes.
+-- The prototype currently evaluates expression and declaration splices.
+-- Annotation wrappers are served from captures produced while replaying
+-- declaration splices with AnnD; they are intentionally same-GHC-version only.
 handleRequest :: EvaluationCache -> SpliceRequest -> IO SpliceResponse
 handleRequest cache request =
   case requestSpliceKind request of
@@ -69,8 +69,10 @@ handleRequest cache request =
       evaluateModuleSplice cache request
     DeclarationSplice ->
       evaluateModuleSplice cache request
+    AnnotationWrapperSplice ->
+      evaluateModuleSplice cache request
     _ ->
       pure $
         SpliceError
           (requestId request)
-          "th-host-worker MVP only supports expression and declaration splices"
+          "th-host-worker MVP only supports expression, declaration, and annotation-wrapper splices"

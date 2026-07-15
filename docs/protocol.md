@@ -34,9 +34,10 @@ declaration
 annotation-wrapper
 ```
 
-The current prototype supports `expression` and `declaration`. Type, pattern,
-and annotation-wrapper splices are protocol values reserved for later
-implementation.
+The current prototype supports `expression` and `declaration`.
+`annotation-wrapper` is supported only as an internal same-GHC-version helper
+for replaying annotation declarations produced by `addTopDecls`. Type and
+pattern splices are protocol values reserved for later implementation.
 
 ## Request
 
@@ -77,6 +78,7 @@ Fields:
   "requestId": "123",
   "status": "ok",
   "generatedHaskell": "42",
+  "annotationWrapper": null,
   "dependentFiles": [],
   "foreignFiles": [],
   "addedTopDecls": "",
@@ -109,6 +111,12 @@ Haskell through `addTopDecls`, rendered as textual Haskell. The cross-side plugi
 parses this fragment and appends the resulting declarations to
 `tcg_th_topdecls`.
 
+`annotationWrapper` contains a binary-encoded GHC `Serialized` value used only
+for `annotation-wrapper` responses. This is intentionally not a cross-version
+textual format. It exists so the GHC 9.8.4 prototype can replay `AnnD`
+declarations generated through `addTopDecls`; host and cross GHC must agree on
+the relevant internal binary representation.
+
 `diagnostics` contains diagnostics registered by host-side Template Haskell
 through `reportWarning` or `reportError`. In GHC 9.8.4 both operations are
 represented internally as `TcRnTHError (ReportCustomQuasiError isError message)`;
@@ -131,6 +139,8 @@ Fields:
 - `requestId`: request id copied from the request.
 - `status`: `"ok"`.
 - `generatedHaskell`: Haskell fragment to parse in the cross GHC process.
+- `annotationWrapper`: same-version binary annotation-wrapper payload, or
+  `null` for normal textual splice results.
 - `dependentFiles`: files to register in the cross GHC session as TH
   dependencies.
 - `foreignFiles`: foreign files to register in the cross GHC session.

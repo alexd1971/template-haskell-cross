@@ -8,9 +8,12 @@ module Worker.Evaluate
   ) where
 
 import Control.Exception (SomeException, catch, displayException)
+import Data.Binary (encode)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Word (Word8)
 import System.Directory (createDirectoryIfMissing)
 import System.IO (hPutStrLn, stderr)
 import GHC
@@ -39,6 +42,7 @@ import GHC.Driver.Session
   )
 import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr)
 import GHC.Parser.Annotation (getLocA)
+import GHC.Serialized (Serialized)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
 import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
 import GHC.Tc.Types (TcGblEnv (..), TcM)
@@ -53,6 +57,7 @@ import GHC.Types.Error
 import GHC.Types.Meta
   ( MetaHook
   , MetaRequest (..)
+  , metaRequestAW
   , metaRequestD
   , metaRequestE
   )
@@ -71,6 +76,7 @@ import GHC.Utils.Outputable
   , renderWithContext
   , sdocSuppressUniques
   )
+import GHCi.TH.Binary ()
 import System.FilePath ((</>), takeDirectory)
 import System.Process (readProcess)
 import THCross.Protocol
@@ -90,7 +96,13 @@ import THCross.SpliceKey
   )
 
 -- | Splice expansions captured while native GHC loaded the requested module.
-type CapturedSplices = Map.Map SpliceKey SpliceResult
+type CapturedSplices = Map.Map SpliceKey CapturedSplice
+
+-- | Captured expansion plus the splice kind used for fallback matching.
+data CapturedSplice = CapturedSplice
+  { capturedSpliceKind :: !SpliceKind
+  , capturedSpliceResult :: !SpliceResult
+  }
 
 -- | In-process cache of splice expansion results captured by whole-module loads.
 --
@@ -129,7 +141,7 @@ handleEvalException =
 -- invokes the hook for each splice it encounters.
 evaluateModuleSpliceResult :: EvaluationCache -> SpliceRequest -> IO (Either String SpliceResult)
 evaluateModuleSpliceResult cache request = do
-  cached <- Map.lookup (requestSpliceKey request) <$> readIORef cache
+  cached <- selectCapturedSplice request <$> readIORef cache
   case cached of
     Just spliceResult -> do
       hPutStrLn stderr ("th-host-worker: cache hit " <> requestSourceFile request)
@@ -142,7 +154,7 @@ evaluateModuleSpliceResult cache request = do
           pure (Left err)
         Right captures -> do
           modifyIORef' cache (Map.union captures)
-          pure (selectCapturedSplice request captures)
+          pure (selectCapturedSpliceOrError request captures)
 
 -- | Load the requested source module and capture all supported splice expansions.
 captureModuleSplices :: SpliceRequest -> IO (Either String CapturedSplices)
@@ -186,10 +198,13 @@ captureModuleSplices request = do
 attachModuleEffects :: [FilePath] -> [SpliceForeignFile] -> CapturedSplices -> CapturedSplices
 attachModuleEffects dependentFiles foreignFiles =
   Map.map
-    ( \spliceResult ->
-        spliceResult
-          { spliceResultDependentFiles = dependentFiles
-          , spliceResultForeignFiles = foreignFiles
+    ( \captured ->
+        captured
+          { capturedSpliceResult =
+              (capturedSpliceResult captured)
+                { spliceResultDependentFiles = dependentFiles
+                , spliceResultForeignFiles = foreignFiles
+                }
           }
     )
 
@@ -254,6 +269,11 @@ captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta re
           (metaRequestD runMeta)
           prettyExpandedDeclarations
       pure (wrap expanded)
+    MetaAW wrap -> do
+      serialized <-
+        captureAnnotationWrapper
+          (metaRequestAW runMeta)
+      pure (wrap serialized)
     _ ->
       runMeta request spliceExpr
   where
@@ -270,19 +290,41 @@ captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta re
       liftIO $ do
         writeIORef dependentFilesRef dependentFiles
         writeIORef foreignFilesRef foreignFiles
-        modifyIORef' capturesRef (Map.insert spliceKey (mkSpliceResult renderedExpansion renderedAddedTopDecls diagnostics))
+        modifyIORef' capturesRef (Map.insert spliceKey (CapturedSplice spliceKind (mkSpliceResult renderedExpansion Nothing renderedAddedTopDecls diagnostics)))
       pure expanded
 
+    captureAnnotationWrapper evaluateSplice = do
+      (serialized, diagnostics, _addedTopDecls) <-
+        evaluateWithIsolatedSpliceState (evaluateSplice spliceExpr)
+      spliceKey <- mkCapturedSpliceKey AnnotationWrapperSplice spliceExpr
+      liftIO $ do
+        modifyIORef'
+          capturesRef
+          ( Map.insert
+              spliceKey
+              ( CapturedSplice
+                  AnnotationWrapperSplice
+                  (mkSpliceResult "" (Just (encodeAnnotationWrapper serialized)) "" diagnostics)
+              )
+          )
+      pure serialized
+
 -- | Construct a captured splice result before module-level effects are attached.
-mkSpliceResult :: String -> String -> [SpliceDiagnostic] -> SpliceResult
-mkSpliceResult renderedExpansion renderedAddedTopDecls diagnostics =
+mkSpliceResult :: String -> Maybe [Word8] -> String -> [SpliceDiagnostic] -> SpliceResult
+mkSpliceResult renderedExpansion annotationWrapper renderedAddedTopDecls diagnostics =
   SpliceResult
     { spliceResultHaskell = renderedExpansion
+    , spliceResultAnnotationWrapper = annotationWrapper
     , spliceResultDependentFiles = []
     , spliceResultForeignFiles = []
     , spliceResultAddedTopDecls = renderedAddedTopDecls
     , spliceResultDiagnostics = diagnostics
     }
+
+-- | Encode a same-version annotation wrapper payload for the cross-side plugin.
+encodeAnnotationWrapper :: Serialized -> [Word8]
+encodeAnnotationWrapper =
+  LBS.unpack . encode
 
 -- | Evaluate one splice while separately recording replayable TH state.
 --
@@ -393,11 +435,20 @@ protocolSourceSpan = \case
 --
 -- Loading a module can execute several splices. The worker first selects by the
 -- opaque splice key derived from module name, splice kind, and source span.
-selectCapturedSplice :: SpliceRequest -> CapturedSplices -> Either String SpliceResult
+selectCapturedSplice :: SpliceRequest -> CapturedSplices -> Maybe SpliceResult
 selectCapturedSplice request captures =
   case Map.lookup (requestSpliceKey request) captures of
-    Just spliceResult ->
-      Right spliceResult
+    Just captured ->
+      Just (capturedSpliceResult captured)
+    Nothing ->
+      selectAnnotationWrapperFallback request captures
+
+-- | Select the host-side expansion corresponding to the cross-side request, or
+-- produce a diagnostic error.
+selectCapturedSpliceOrError :: SpliceRequest -> CapturedSplices -> Either String SpliceResult
+selectCapturedSpliceOrError request captures =
+  case selectCapturedSplice request captures of
+    Just spliceResult -> Right spliceResult
     Nothing ->
       Left $
         "host GHC did not capture requested splice; request key "
@@ -406,6 +457,17 @@ selectCapturedSplice request captures =
           <> show (Map.size captures)
           <> " splice(s): "
           <> show (Map.keys captures)
+
+-- | Annotation declarations replayed from text get synthetic source spans on
+-- the cross side. For the MVP, fall back to the only captured annotation wrapper
+-- in the module.
+selectAnnotationWrapperFallback :: SpliceRequest -> CapturedSplices -> Maybe SpliceResult
+selectAnnotationWrapperFallback request captures
+  | requestSpliceKind request /= AnnotationWrapperSplice = Nothing
+  | otherwise =
+      case [capturedSpliceResult captured | captured <- Map.elems captures, capturedSpliceKind captured == AnnotationWrapperSplice] of
+        [spliceResult] -> Just spliceResult
+        _ -> Nothing
 
 -- | Remove trailing newlines from command output such as @ghc --print-libdir@.
 trimTrailingNewline :: String -> String
