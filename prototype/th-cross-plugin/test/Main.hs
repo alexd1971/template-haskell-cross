@@ -4,7 +4,8 @@ module Main (main) where
 
 import Integration.Cases (testTrees)
 import Integration.Harness
-  ( cabalBuild
+  ( TestEnv (..)
+  , cabalBuild
   , cabalListBin
   , findProjectRoot
   )
@@ -18,8 +19,14 @@ main = do
   cabalBuild projectRoot "th-host-worker"
   workerPath <- cabalListBin projectRoot "th-host-worker"
   fixturesDir <- makeAbsolute (takeDirectory __FILE__ </> "fixtures")
+  let testEnv =
+        TestEnv
+          { testProjectRoot = projectRoot
+          , testFixturesDir = fixturesDir
+          , testWorkerPath = workerPath
+          }
   defaultMain
     ( testGroup
         "integration"
-        (testTrees projectRoot fixturesDir workerPath)
+        (testTrees testEnv)
     )

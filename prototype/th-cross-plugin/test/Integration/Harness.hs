@@ -1,10 +1,14 @@
 module Integration.Harness
-  ( ExpectedExit (..)
-  , TestCase (..)
+  ( CompileExpectation (..)
+  , ExpectedExit (..)
+  , TestEnv (..)
   , cabalBuild
   , cabalListBin
+  , compileNatively
+  , compileWithDummyExpr
+  , compileWithPlugin
+  , expectSuccess
   , findProjectRoot
-  , mkTest
   ) where
 
 import Control.Monad (forM_, when)
@@ -24,16 +28,12 @@ import System.Process
   , proc
   , readCreateProcessWithExitCode
   )
-import Test.Tasty (TestTree)
-import Test.Tasty.HUnit (Assertion, assertFailure, testCase)
+import Test.Tasty.HUnit (Assertion, assertFailure)
 
-data TestCase = TestCase
-  { testName :: !String
-  , testModulePath :: !FilePath
-  , testPluginOptions :: ![String]
-  , testExpectedExit :: !ExpectedExit
-  , testStdoutOccurrences :: ![(String, Int)]
-  , testStderrOccurrences :: ![(String, Int)]
+data TestEnv = TestEnv
+  { testProjectRoot :: !FilePath
+  , testFixturesDir :: !FilePath
+  , testWorkerPath :: !FilePath
   }
 
 data ExpectedExit
@@ -41,22 +41,74 @@ data ExpectedExit
   | ExpectFailure
   deriving (Eq, Show)
 
-mkTest :: FilePath -> FilePath -> TestCase -> TestTree
-mkTest projectRoot fixturesDir testInfo =
-  testCase (testName testInfo) (runCase projectRoot fixturesDir testInfo)
+data CompileExpectation = CompileExpectation
+  { expectedExit :: !ExpectedExit
+  , expectedStdout :: ![(String, Int)]
+  , expectedStderr :: ![(String, Int)]
+  }
 
-runCase :: FilePath -> FilePath -> TestCase -> Assertion
-runCase projectRoot fixturesDir testInfo = do
+data CompileSpec = CompileSpec
+  { specLabel :: !String
+  , specModulePath :: !FilePath
+  , specGhcOptions :: ![String]
+  , specExpectation :: !CompileExpectation
+  }
+
+expectSuccess :: CompileExpectation
+expectSuccess =
+  CompileExpectation
+    { expectedExit = ExpectSuccess
+    , expectedStdout = []
+    , expectedStderr = []
+    }
+
+compileWithPlugin :: TestEnv -> FilePath -> CompileExpectation -> Assertion
+compileWithPlugin testEnv modulePath expectation =
+  runCompileSpec testEnv $
+    CompileSpec
+      { specLabel = "plugin"
+      , specModulePath = modulePath
+      , specGhcOptions = workerPluginOptions testEnv
+      , specExpectation = expectation
+      }
+
+compileNatively :: TestEnv -> FilePath -> CompileExpectation -> Assertion
+compileNatively testEnv modulePath expectation =
+  runCompileSpec testEnv $
+    CompileSpec
+      { specLabel = "native"
+      , specModulePath = modulePath
+      , specGhcOptions = []
+      , specExpectation = expectation
+      }
+
+compileWithDummyExpr :: TestEnv -> FilePath -> Assertion
+compileWithDummyExpr testEnv modulePath =
+  runCompileSpec testEnv $
+    CompileSpec
+      { specLabel = "dummy-expr"
+      , specModulePath = modulePath
+      , specGhcOptions =
+          [ "-fplugin=THCross.Plugin"
+          , "-fplugin-opt=THCross.Plugin:dummy-expr"
+          ]
+      , specExpectation = expectSuccess
+      }
+
+runCompileSpec :: TestEnv -> CompileSpec -> Assertion
+runCompileSpec
+  testEnv
+  spec = do
   let testBuildDir =
-        projectRoot
+        testProjectRoot testEnv
           </> "dist-newstyle"
           </> "th-cross-integration"
-          </> sanitizePathSegment (testName testInfo <> "-" <> testModulePath testInfo)
+          </> sanitizePathSegment (specLabel spec <> "-" <> specModulePath spec)
   createDirectoryIfMissing True testBuildDir
   let args =
         [ "exec"
         , "--project-dir"
-        , projectRoot
+        , testProjectRoot testEnv
         , "--"
         , "ghc"
         , "-v0"
@@ -64,7 +116,7 @@ runCase projectRoot fixturesDir testInfo = do
         , "-fforce-recomp"
         , "-package"
         , "th-cross-plugin"
-        , "-i" <> fixturesDir
+        , "-i" <> testFixturesDir testEnv
         , "-outputdir"
         , testBuildDir
         , "-hidir"
@@ -74,16 +126,23 @@ runCase projectRoot fixturesDir testInfo = do
         , "-stubdir"
         , testBuildDir
         ]
-          <> testPluginOptions testInfo
-          <> [testModulePath testInfo]
-  (exitCode, out, err) <- readCreateProcessWithExitCode (inProject fixturesDir (proc "cabal" args)) ""
-  checkExpectedExit testInfo exitCode out err
-  checkOutputOccurrences "stdout" testInfo out (testStdoutOccurrences testInfo)
-  checkOutputOccurrences "stderr" testInfo err (testStderrOccurrences testInfo)
+          <> specGhcOptions spec
+          <> [specModulePath spec]
+  (exitCode, out, err) <- readCreateProcessWithExitCode (inProject (testFixturesDir testEnv) (proc "cabal" args)) ""
+  let expectation = specExpectation spec
+  checkExpectedExit (specLabel spec) (expectedExit expectation) exitCode out err
+  checkOutputOccurrences "stdout" (specLabel spec) out (expectedStdout expectation)
+  checkOutputOccurrences "stderr" (specLabel spec) err (expectedStderr expectation)
 
-checkExpectedExit :: TestCase -> ExitCode -> String -> String -> Assertion
-checkExpectedExit testInfo exitCode out err =
-  case (testExpectedExit testInfo, exitCode) of
+workerPluginOptions :: TestEnv -> [String]
+workerPluginOptions testEnv =
+  [ "-fplugin=THCross.Plugin"
+  , "-fplugin-opt=THCross.Plugin:worker=" <> testWorkerPath testEnv
+  ]
+
+checkExpectedExit :: String -> ExpectedExit -> ExitCode -> String -> String -> Assertion
+checkExpectedExit testName expectedExitStatus exitCode out err =
+  case (expectedExitStatus, exitCode) of
     (ExpectSuccess, ExitSuccess) ->
       pure ()
     (ExpectFailure, ExitFailure _) ->
@@ -91,7 +150,7 @@ checkExpectedExit testInfo exitCode out err =
     (expected, actual) ->
       assertFailure
         ( testFailureMessage
-            testInfo
+            testName
             [ "expected exit: " <> show expected
             , "actual exit: " <> show actual
             , "stdout:"
@@ -101,14 +160,14 @@ checkExpectedExit testInfo exitCode out err =
             ]
         )
 
-checkOutputOccurrences :: String -> TestCase -> String -> [(String, Int)] -> Assertion
-checkOutputOccurrences streamName testInfo output expectations =
+checkOutputOccurrences :: String -> String -> String -> [(String, Int)] -> Assertion
+checkOutputOccurrences streamName testName output expectations =
   forM_ expectations $ \(needle, expected) -> do
     let actual = countOccurrences needle output
     when (actual /= expected) $
       assertFailure
         ( testFailureMessage
-            testInfo
+            testName
             [ "expected "
                 <> streamName
                 <> " occurrence count for "
@@ -122,9 +181,9 @@ checkOutputOccurrences streamName testInfo output expectations =
             ]
         )
 
-testFailureMessage :: TestCase -> [String] -> String
-testFailureMessage testInfo details =
-  unlines ("integration test failed: " <> testName testInfo : details)
+testFailureMessage :: String -> [String] -> String
+testFailureMessage testName details =
+  unlines ("integration test failed: " <> testName : details)
 
 countOccurrences :: String -> String -> Int
 countOccurrences needle haystack
