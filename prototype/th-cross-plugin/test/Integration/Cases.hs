@@ -175,6 +175,19 @@ addTopDeclsTests testEnv =
             compileNatively testEnv "AddTopDeclsTypedSplice.hs" expectSuccess
         ]
     , testGroup
+        "exact name reference"
+        [ testCase "plugin" $
+            compileWithPlugin
+              testEnv
+              "AddTopDeclsExactName.hs"
+              expectSuccess
+                { expectedStdout =
+                    [("th-cross: added top decls 2", 1)]
+                }
+        , testCase "native" $
+            compileNatively testEnv "AddTopDeclsExactName.hs" expectSuccess
+        ]
+    , testGroup
         "invalid declaration"
         [ testCase "plugin" $
             compileWithPlugin

@@ -228,13 +228,12 @@ Why this is harder than `addDependentFile` or `addForeignFilePath`:
 - Textual transport is still possible, but replay must preserve declaration
   ordering and staging. Simply appending declarations to a side list may be too
   late if later declarations in the same group depend on them.
-- `tcg_th_topnames` matters for exact-name tracking. Replaying only text does
-  not reproduce host exact names. The current successful tests avoid relying on
-  later ordinary source references to names introduced by `addTopDecls`.
+- `tcg_th_topnames` matters for exact-name tracking. Replaying only text through
+  `tcg_th_topdecls` does not reproduce host exact names. The successful
+  exact-name declaration-splice test therefore uses Strategy B grafting.
 
-Strategy A is now the primary implementation path. Strategy B remains a fallback
-if a declaration-splice-specific case cannot be represented correctly through
-`tcg_th_topdecls` replay.
+The prototype now uses a hybrid implementation: Strategy A for non-declaration
+splices, and Strategy B for declaration splices.
 
 ### Strategy A: replay through `tcg_th_topdecls`
 
@@ -268,9 +267,13 @@ Required implementation details:
   splice, and then restoring `addedTopDecls <> previousTopDecls`.
 - Preserve GHC's prepend order. GHC uses `ds ++ topds`, so the captured wire
   order must match the order GHC would later consume.
-- Parse declaration fragments on the cross side and update
-  `tcg_th_topdecls :: TcRef [LHsDecl GhcPs]`. The prototype does this through
-  the same declaration-fragment parser used for declaration splice results.
+- For non-declaration splices, parse declaration fragments on the cross side and
+  update `tcg_th_topdecls :: TcRef [LHsDecl GhcPs]`. The prototype does this
+  through the same declaration-fragment parser used for declaration splice
+  results.
+- For declaration splices, graft the added declarations into the `MetaD` result
+  instead. This avoids losing the useful same-group relationship between the
+  declaration-splice result and declarations added by `addTopDecls`.
 - Decide what to do with `tcg_th_topnames :: TcRef NameSet`. The current text
   replay path does not transport exact `Name`s. This is acceptable for the
   tested subset, but it is not full `addTopDecls` semantics.
@@ -293,6 +296,9 @@ Integration coverage now includes:
   same-GHC-version `MetaAW`/annotation-wrapper forwarding;
 - success: top-level typed expression splice using `unsafeCodeCoerce`, confirming
   GHC 9.8.4 routes this case through the existing `MetaE` hook path;
+- success: declaration splice where the returned declarations reference a
+  binding introduced through `addTopDecls` with an exact `newName`; this uses
+  Strategy B grafting for `MetaD`;
 - expected failure: invalid declaration passed to `addTopDecls`;
 - expected failure: declaration added through `addTopDecls` contains a normal
   typechecking error.
@@ -360,7 +366,7 @@ Relevant upstream GHC 9.8.4 tests found in `testsuite/tests/th`:
   splices. In the GHC 9.8.4 testsuite this test is marked `expect_broken(13587)`,
   so it is not a stable acceptance test for this prototype yet.
 
-### Fallback Strategy B: graft into declaration splice expansion
+### Strategy B: graft into declaration splice expansion
 
 Conceptual flow:
 
@@ -368,8 +374,8 @@ Conceptual flow:
 host declaration splice executes
   -> host captures primary declaration-splice result
   -> host also captures addTopDecls declarations produced during that splice
-  -> worker returns one combined declaration fragment
-  -> cross plugin parses combined declarations
+  -> worker returns the primary declaration fragment and addedTopDecls fragment
+  -> cross plugin parses both fragments
   -> runMetaHook returns combined [LHsDecl GhcPs] from MetaD
 ```
 
@@ -393,14 +399,14 @@ Required implementation details:
   examples.
 - Pretty-print and reparse the combined declaration fragment on the cross side.
 
-Main risk:
+Main limitation:
 
 This does not implement the full `addTopDecls` API. It only handles the subset
 where `addTopDecls` is called during a declaration splice and the added
 declarations can be safely represented as part of that splice's returned
 declaration list.
 
-Minimum validation example:
+Implemented validation shape:
 
 ```haskell
 {-# LANGUAGE TemplateHaskell #-}
@@ -408,46 +414,46 @@ Minimum validation example:
 module Example where
 
 $( do
-     addTopDecls
-       [ valD (varP (mkName "generated")) (normalB [| 42 :: Int |]) []
-       ]
-     pure []
+     generatedName <- newName "generated"
+     let fooName = mkName "foo"
+     addTopDecls [ValD (VarP generatedName) (NormalB (LitE (IntegerL 42))) []]
+     pure [ValD (VarP fooName) (NormalB (VarE generatedName)) []]
  )
-
-foo :: Int
-foo = generated
 ```
 
-This passes if the combined `MetaD` result inserts `generated` before `foo` is
-renamed/typechecked.
+This is native-GHC-valid because the returned declaration references the exact
+name introduced by `addTopDecls`. Plain textual replay through
+`tcg_th_topdecls` loses that exact-name relationship; grafting both fragments
+into one `MetaD` result preserves enough source-level structure for this case.
 
 ### Strategy Status
 
 | Criterion | Strategy A: `tcg_th_topdecls` replay | Strategy B: `MetaD` grafting |
 | --- | --- | --- |
-| Current role | Primary path | Fallback |
+| Current role | Primary path for non-declaration splices | Primary path for declaration splices |
 | Scope | Potentially full `addTopDecls` semantics | Declaration splices only |
 | Cross-side mechanism | Mutate GHC TH state refs | Return larger `MetaD` result |
 | Ordering risk | Reduced for native-GHC-valid expression-splice cases now covered by tests | Lower for declaration splices, but narrower semantics |
 | `tcg_th_topnames` risk | Confirmed limitation for text replay; exact names are not transported | May be avoided if normal declaration splice path handles names |
 | Expression-splice support | Possible | Not supported initially |
-| Prototype status | Implemented for a tested subset | Not implemented |
+| Prototype status | Implemented for a tested subset | Implemented for a tested subset |
 | Semantic completeness | Better target | Partial but more controlled |
 
 Recommendation:
 
-Continue with Strategy A, because it is the only route that can plausibly cover
-`addTopDecls` from expression splices as well as declaration splices, and the
-consumer path in `tc_rn_src_decls` confirms that replaying into
-`tcg_th_topdecls` happens early enough for the current group. The current
-implementation is still subset support, not full semantic support. Before
-declaring full support, add native-GHC-valid tests for type/pattern splice
-contexts and exact-name-heavy cases, and decide whether `tcg_th_topnames` needs
-explicit protocol support.
+Use a hybrid implementation:
 
-Keep Strategy B only as a fallback for declaration-splice-specific issues. It is
-less likely to become the main path now that Strategy A has a working
-end-to-end smoke implementation.
+- Strategy A remains necessary for expression splices, including typed
+  expression splices routed through `MetaE`, because they cannot return a larger
+  declaration-splice result.
+- Strategy B is preferable for declaration splices because it avoids a confirmed
+  exact-name loss when the declaration-splice result references names introduced
+  by `addTopDecls`.
+
+The current implementation is still subset support, not full semantic support.
+Before declaring full support, add native-GHC-valid tests for type/pattern
+splice contexts and decide whether any remaining cases require explicit
+`tcg_th_topnames` protocol support.
 
 ## Important Limitations
 

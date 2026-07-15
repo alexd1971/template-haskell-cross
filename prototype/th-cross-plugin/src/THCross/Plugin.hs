@@ -137,7 +137,7 @@ loggingMetaHook workerState mode request spliceExpr = do
     MetaD wrap
       | WorkerMode{} <- mode -> do
           generated <-
-            evaluateWorkerSplice tcGblEnv parseDeclarationFragments
+            evaluateWorkerDeclarationSplice tcGblEnv
           pure (wrap generated)
     MetaAW wrap
       | WorkerMode{} <- mode -> do
@@ -177,6 +177,34 @@ loggingMetaHook workerState mode request spliceExpr = do
           parseFragment (spliceResultHaskell spliceResult)
         _ ->
           fail "evaluateWorkerSplice called outside worker mode"
+
+    evaluateWorkerDeclarationSplice tcGblEnv =
+      case mode of
+        WorkerMode workerPath -> do
+          spliceResult <-
+            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+          replayDependentFiles (spliceResultDependentFiles spliceResult)
+          replayForeignFiles (spliceResultForeignFiles spliceResult)
+          replayDiagnostics (spliceResultDiagnostics spliceResult)
+          parseDeclarationSpliceResult spliceResult
+        _ ->
+          fail "evaluateWorkerDeclarationSplice called outside worker mode"
+
+    parseDeclarationSpliceResult spliceResult = do
+      addedDecls <- parseAddedTopDeclsForDeclarationSplice (spliceResultAddedTopDecls spliceResult)
+      generatedDecls <- parseDeclarationFragments (spliceResultHaskell spliceResult)
+      pure (addedDecls <> generatedDecls)
+
+    parseAddedTopDeclsForDeclarationSplice addedTopDecls
+      | null addedTopDecls = pure []
+      | otherwise = do
+          parsedDecls <- parseDeclarationFragments addedTopDecls
+          liftIO $
+            putStrLn
+              ( "th-cross: added top decls "
+                  <> show (length parsedDecls)
+              )
+          pure parsedDecls
 
     evaluateWorkerAnnotationWrapper tcGblEnv =
       case mode of
