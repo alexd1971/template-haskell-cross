@@ -53,7 +53,7 @@ For correctness, every effect that changes GHC compilation state must either be:
 | `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Partially forwarded through Strategy A. | The worker response includes textual `addedTopDecls`; the cross-side plugin parses and appends them to `tcg_th_topdecls`. `AnnD` is covered by same-GHC-version annotation-wrapper forwarding. Value-binding visibility and `tcg_th_topnames` semantics need more investigation. |
 | `addForeignFile` | Deprecated wrapper around foreign source emission. | Must be forwarded through `addForeignFilePath` or unsupported. | Treat via `addForeignSource`/`addForeignFilePath`. Direct string source emission is still unsupported in MVP. |
 | `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `foreignFiles`; the cross-side plugin appends them to `tcg_th_foreign_files`, so the target-side build owns compilation/linking. |
-| `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Must be forwarded to cross GHC. | Unsupported in MVP. Later replay on the cross-side compilation session; plugin availability must be checked in the cross compiler environment. |
+| `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Unsupported in MVP; must be forwarded before production use. | Future protocol can carry `corePlugins :: [String]`; cross-side replay must check that the plugin is available to the cross compiler environment. |
 | `addModFinalizer` | Stores a finalizer reference for later module-finalizer execution with the local environment. | Must be modeled explicitly or unsupported. | Unsupported in MVP. Host execution may run finalizers, but their resulting diagnostics/dependencies/state changes are not automatically visible to cross GHC. |
 | `reportWarning` | `qReport False` adds a diagnostic and continues. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError False message)`. | Forwarded to cross GHC in the prototype. | The worker response includes this TH diagnostic; the cross-side plugin replays it with `addDiagnostic`. |
 | `reportError` | `qReport True` adds an error; the splice may continue unless it fails. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError True message)`. | Partially forwarded. | The protocol can carry this TH diagnostic and the cross-side plugin replays it with `addErr`. If host GHC fails before a splice result is captured, the worker still returns a worker error string. |
@@ -553,3 +553,103 @@ Possible future implementation:
 This requires careful ordering. Replaying finalizer effects too early could
 change normal GHC staging semantics; replaying them per splice would duplicate
 effects.
+
+## `addCorePlugin` Investigation
+
+GHC 9.8.4 public API:
+
+```haskell
+addCorePlugin :: String -> Q ()
+```
+
+Source:
+
+- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`, around lines
+  864-872
+- `compiler/GHC/Tc/Gen/Splice.hs`, `qAddCorePlugin`, around lines 1479-1492
+- `compiler/GHC/Tc/Gen/Splice.hs`, remote TH `AddCorePlugin` handling, around
+  line 1837
+- `compiler/GHC/Tc/Types.hs`, `tcg_th_coreplugins`, around lines 573-574
+
+The public documentation says:
+
+```text
+addCorePlugin m has almost the same effect as passing -fplugin=m to ghc
+```
+
+with one important restriction: the plugin module must not belong to the current
+package, because by the time TH runs it is too late to compile a plugin module
+from the same package first.
+
+GHC enforces this restriction in `qAddCorePlugin`:
+
+1. read `HscEnv` with `getTopEnv`;
+2. initialize finder options from `DynFlags`;
+3. call `findHomeModule` for the requested plugin module name;
+4. if the module is found in the home unit, report
+   `TcRnTHError (AddInvalidCorePlugin plugin)`;
+5. otherwise prepend the plugin string to:
+
+```haskell
+tcg_th_coreplugins :: TcRef [String]
+```
+
+with:
+
+```haskell
+updTcRef th_coreplugins_var (plugin:)
+```
+
+### Prototype Behavior
+
+The current worker does not capture `tcg_th_coreplugins`, and the protocol has
+no field for core plugins. If host-side TH calls `addCorePlugin`, native GHC may
+record it in the host GHC session, but the cross-side GHC session will not see
+that effect.
+
+This is not safe to silently ignore for real builds: a core plugin can change
+Core-to-Core optimization or even program semantics.
+
+### MVP Decision
+
+`addCorePlugin` remains unsupported in the MVP.
+
+Unlike `addModFinalizer`, this effect has a simple wire shape:
+
+```json
+{
+  "corePlugins": [
+    "My.Core.Plugin"
+  ]
+}
+```
+
+and cross-side replay would be mechanically similar to:
+
+```haskell
+updTcRef (tcg_th_coreplugins tcGblEnv) (plugins <>)
+```
+
+However, correctness depends on the plugin being available to the cross compiler
+as a compiler plugin, not merely to the host worker. This is especially
+important for cross builds:
+
+- the plugin must be build-host executable code loaded by cross GHC;
+- it must be present in the cross compiler package environment;
+- it must not be confused with target libraries;
+- replaying it may make builds depend on a plugin that the original host worker
+  happened to find differently.
+
+Recommended future implementation:
+
+1. Add `corePlugins :: [String]` to the worker response or module-level effects.
+2. Capture `tcg_th_coreplugins` deltas in the worker.
+3. Replay them into cross-side `tcg_th_coreplugins`.
+4. Add diagnostics that clearly say the core plugin must be available to the
+   cross GHC plugin environment.
+5. Add tests only with a separate package/plugin module, not with a plugin from
+   the current package, because GHC explicitly rejects that shape.
+
+Until then, a production-facing mode should fail explicitly if the worker
+observes a non-empty `tcg_th_coreplugins` delta. The current prototype does not
+yet detect that condition.
