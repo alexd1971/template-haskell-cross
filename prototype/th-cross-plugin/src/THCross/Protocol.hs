@@ -129,6 +129,8 @@ data SpliceResult = SpliceResult
     spliceResultDependentFiles :: ![FilePath]
   , -- | Foreign files registered through @addForeignFilePath@.
     spliceResultForeignFiles :: ![SpliceForeignFile]
+  , -- | Top-level declarations registered through @addTopDecls@.
+    spliceResultAddedTopDecls :: !String
   , -- | Diagnostics reported by host-side TH and replayed in cross GHC.
     spliceResultDiagnostics :: ![SpliceDiagnostic]
   }
@@ -140,6 +142,7 @@ instance ToJSON SpliceResult where
       [ "generatedHaskell" .= spliceResultHaskell result
       , "dependentFiles" .= spliceResultDependentFiles result
       , "foreignFiles" .= spliceResultForeignFiles result
+      , "addedTopDecls" .= spliceResultAddedTopDecls result
       , "diagnostics" .= spliceResultDiagnostics result
       ]
 
@@ -150,6 +153,7 @@ instance FromJSON SpliceResult where
         <$> obj .: "generatedHaskell"
         <*> obj .: "dependentFiles"
         <*> obj .:? "foreignFiles" .!= []
+        <*> obj .:? "addedTopDecls" .!= ""
         <*> obj .:? "diagnostics" .!= []
 
 -- | 1-based source span for the splice as seen by the cross GHC process.
@@ -298,6 +302,7 @@ instance ToJSON SpliceResponse where
           , "generatedHaskell" .= spliceResultHaskell spliceResult
           , "dependentFiles" .= spliceResultDependentFiles spliceResult
           , "foreignFiles" .= spliceResultForeignFiles spliceResult
+          , "addedTopDecls" .= spliceResultAddedTopDecls spliceResult
           , "diagnostics" .= spliceResultDiagnostics spliceResult
           ]
       SpliceError reqId message ->
@@ -319,6 +324,7 @@ instance FromJSON SpliceResponse where
                     <$> obj .: "generatedHaskell"
                     <*> obj .: "dependentFiles"
                     <*> obj .:? "foreignFiles" .!= []
+                    <*> obj .:? "addedTopDecls" .!= ""
                     <*> obj .:? "diagnostics" .!= []
                 )
         "error" -> SpliceError reqId <$> obj .: "message"

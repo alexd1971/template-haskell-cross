@@ -1,14 +1,21 @@
 module Integration.Cases
-  ( testCases
+  ( testTrees
   ) where
 
 import Integration.Harness
-  ( ExpectedExit (ExpectSuccess)
+  ( ExpectedExit (ExpectFailure, ExpectSuccess)
   , TestCase (..)
+  , mkTest
   )
+import Test.Tasty (TestTree, testGroup)
 
-testCases :: FilePath -> [TestCase]
-testCases workerPath =
+testTrees :: FilePath -> FilePath -> FilePath -> [TestTree]
+testTrees projectRoot fixturesDir workerPath =
+  map (mkTest projectRoot fixturesDir) (baseCases workerPath)
+    <> [addTopDeclsTests projectRoot fixturesDir workerPath]
+
+baseCases :: FilePath -> [TestCase]
+baseCases workerPath =
   [ -- Proves that the plugin can replace an expression splice locally
     -- without executing the original Template Haskell expression.
     TestCase
@@ -148,6 +155,159 @@ testCases workerPath =
       , testStderrOccurrences = []
       }
   ]
+
+addTopDeclsTests :: FilePath -> FilePath -> FilePath -> TestTree
+addTopDeclsTests projectRoot fixturesDir workerPath =
+  testGroup
+    "addTopDecls"
+    [ -- Verifies Strategy A smoke behavior for addTopDecls: the plugin replays
+      -- declarations through cross-side tcg_th_topdecls while expanding an
+      -- expression splice.
+      addTopDeclsPair
+        projectRoot
+        fixturesDir
+        workerPath
+        "propagation"
+        "AddTopDeclsExpr.hs"
+        ExpectSuccess
+        [("th-cross: added top decls 1", 1)]
+        []
+        ExpectSuccess
+        []
+        []
+      -- Confirms that one addTopDecls call can replay more than one
+      -- declaration.
+    , addTopDeclsPair
+        projectRoot
+        fixturesDir
+        workerPath
+        "multiple declarations"
+        "AddTopDeclsMultipleDecls.hs"
+        ExpectSuccess
+        [("th-cross: added top decls 4", 1)]
+        []
+        ExpectSuccess
+        []
+        []
+      -- Confirms that addTopDecls effects from separate splices are replayed
+      -- independently and remain visible to later declarations.
+    , addTopDeclsPair
+        projectRoot
+        fixturesDir
+        workerPath
+        "multiple splices"
+        "AddTopDeclsMultipleSplices.hs"
+        ExpectSuccess
+        [("th-cross: added top decls 2", 2)]
+        []
+        ExpectSuccess
+        []
+        []
+      -- Exercises GHC's appendGroups path: source declarations before the
+      -- splice are renamed/typechecked before declarations replayed from
+      -- addTopDecls.
+    , addTopDeclsPair
+        projectRoot
+        fixturesDir
+        workerPath
+        "source before added declarations"
+        "AddTopDeclsOrdering.hs"
+        ExpectSuccess
+        [("th-cross: added top decls 2", 1)]
+        []
+        ExpectSuccess
+        []
+        []
+      -- Mirrors the upstream invalid-declaration shape: addTopDecls should
+      -- reject declarations that GHC cannot convert/typecheck.
+    , addTopDeclsPair
+        projectRoot
+        fixturesDir
+        workerPath
+        "invalid declaration"
+        "AddTopDeclsInvalidDecl.hs"
+        ExpectFailure
+        [("worker-error: TH host worker error", 1)]
+        [("Error in a declaration passed to", 1)]
+        ExpectFailure
+        []
+        [("Error in a declaration passed to", 1)]
+      -- Mirrors upstream compile-fail coverage: declarations added through
+      -- addTopDecls are still typechecked by native GHC.
+    , addTopDeclsPair
+        projectRoot
+        fixturesDir
+        workerPath
+        "type error"
+        "AddTopDeclsTypeError.hs"
+        ExpectFailure
+        [("worker-error: TH host worker error", 1)]
+        [("Illegal term-level use", 1)]
+        ExpectFailure
+        []
+        [("Illegal term-level use", 1)]
+      -- Adapted from upstream T10638: unsupported foreign import prim shapes
+      -- must be rejected by GHC during addTopDecls processing.
+    , addTopDeclsPair
+        projectRoot
+        fixturesDir
+        workerPath
+        "invalid prim import"
+        "AddTopDeclsInvalidPrimImport.hs"
+        ExpectFailure
+        [("worker-error: TH host worker error", 1)]
+        [("is not a valid C identifier", 1)]
+        ExpectFailure
+        []
+        [("is not a valid C identifier", 1)]
+    ]
+
+addTopDeclsPair ::
+  FilePath ->
+  FilePath ->
+  FilePath ->
+  String ->
+  FilePath ->
+  ExpectedExit ->
+  [(String, Int)] ->
+  [(String, Int)] ->
+  ExpectedExit ->
+  [(String, Int)] ->
+  [(String, Int)] ->
+  TestTree
+addTopDeclsPair
+  projectRoot
+  fixturesDir
+  workerPath
+  groupName
+  modulePath
+  pluginExpectedExit
+  pluginStdoutOccurrences
+  pluginStderrOccurrences
+  nativeExpectedExit
+  nativeStdoutOccurrences
+  nativeStderrOccurrences =
+    testGroup
+      groupName
+      [ mkTest projectRoot fixturesDir $
+          TestCase
+            { testName = "plugin"
+            , testModulePath = modulePath
+            , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = pluginExpectedExit
+            , testStdoutOccurrences = pluginStdoutOccurrences
+            , testStderrOccurrences = pluginStderrOccurrences
+            }
+      , mkTest projectRoot fixturesDir $
+          TestCase
+            { testName = "native"
+            , testModulePath = modulePath
+            , testPluginOptions = []
+            , testExpectedExit = nativeExpectedExit
+            , testStdoutOccurrences = nativeStdoutOccurrences
+            , testStderrOccurrences = nativeStderrOccurrences
+            }
+      ]
 
 workerPluginOptions :: FilePath -> [String]
 workerPluginOptions workerPath =

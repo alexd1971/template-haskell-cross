@@ -163,6 +163,7 @@ loggingMetaHook workerState mode request spliceExpr = do
             requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
           replayDependentFiles (spliceResultDependentFiles spliceResult)
           replayForeignFiles (spliceResultForeignFiles spliceResult)
+          replayAddedTopDecls (spliceResultAddedTopDecls spliceResult)
           replayDiagnostics (spliceResultDiagnostics spliceResult)
           parseFragment (spliceResultHaskell spliceResult)
         _ ->
@@ -321,6 +322,20 @@ replayForeignFiles foreignFiles = do
             (spliceForeignFileLang foreignFile, spliceForeignFilePath foreignFile)
         )
         foreignFiles
+
+-- | Replay host-side @addTopDecls@ effects in the cross GHC session.
+replayAddedTopDecls :: String -> TcM ()
+replayAddedTopDecls addedTopDecls
+  | null addedTopDecls = pure ()
+  | otherwise = do
+      parsedDecls <- parseDeclarationFragments addedTopDecls
+      tcGblEnv <- getGblEnv
+      updTcRef (tcg_th_topdecls tcGblEnv) (parsedDecls <>)
+      liftIO $
+        putStrLn
+          ( "th-cross: added top decls "
+              <> show (length parsedDecls)
+          )
 
 -- | Replay host-side @reportWarning@ and @reportError@ effects in cross GHC.
 replayDiagnostics :: [SpliceDiagnostic] -> TcM ()

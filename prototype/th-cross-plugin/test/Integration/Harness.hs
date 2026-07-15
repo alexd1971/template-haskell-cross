@@ -51,7 +51,7 @@ runCase projectRoot fixturesDir testInfo = do
         projectRoot
           </> "dist-newstyle"
           </> "th-cross-integration"
-          </> sanitizePathSegment (testName testInfo)
+          </> sanitizePathSegment (testName testInfo <> "-" <> testModulePath testInfo)
   createDirectoryIfMissing True testBuildDir
   let args =
         [ "exec"

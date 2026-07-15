@@ -79,6 +79,7 @@ Fields:
   "generatedHaskell": "42",
   "dependentFiles": [],
   "foreignFiles": [],
+  "addedTopDecls": "",
   "diagnostics": []
 }
 ```
@@ -102,6 +103,11 @@ Foreign file entry:
 
 `language` is one of `c`, `cxx`, `objc`, `objcxx`, `asm`, `js`, or
 `raw-object`.
+
+`addedTopDecls` contains top-level declarations registered by host-side Template
+Haskell through `addTopDecls`, rendered as textual Haskell. The cross-side plugin
+parses this fragment and appends the resulting declarations to
+`tcg_th_topdecls`.
 
 `diagnostics` contains diagnostics registered by host-side Template Haskell
 through `reportWarning` or `reportError`. In GHC 9.8.4 both operations are
@@ -128,6 +134,8 @@ Fields:
 - `dependentFiles`: files to register in the cross GHC session as TH
   dependencies.
 - `foreignFiles`: foreign files to register in the cross GHC session.
+- `addedTopDecls`: textual declarations to register in cross-side
+  `tcg_th_topdecls`.
 - `diagnostics`: host-side TH diagnostics to replay in the cross GHC session.
 
 ## Error Response

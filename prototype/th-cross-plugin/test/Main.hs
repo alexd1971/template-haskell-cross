@@ -2,12 +2,11 @@
 
 module Main (main) where
 
-import Integration.Cases (testCases)
+import Integration.Cases (testTrees)
 import Integration.Harness
   ( cabalBuild
   , cabalListBin
   , findProjectRoot
-  , mkTest
   )
 import System.Directory (makeAbsolute)
 import System.FilePath ((</>), takeDirectory)
@@ -22,5 +21,5 @@ main = do
   defaultMain
     ( testGroup
         "integration"
-        (map (mkTest projectRoot fixturesDir) (testCases workerPath))
+        (testTrees projectRoot fixturesDir workerPath)
     )

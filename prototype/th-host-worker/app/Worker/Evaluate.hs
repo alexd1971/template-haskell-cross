@@ -260,43 +260,55 @@ captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta re
     runMeta = fromMaybe defaultRunMeta previousRunMeta
 
     captureSpliceResult spliceKind evaluateSplice renderExpanded = do
-      (expanded, diagnostics) <-
-        evaluateWithIsolatedDiagnostics (evaluateSplice spliceExpr)
+      (expanded, diagnostics, addedTopDecls) <-
+        evaluateWithIsolatedSpliceState (evaluateSplice spliceExpr)
       renderedExpansion <- renderExpanded expanded
+      renderedAddedTopDecls <- prettyExpandedDeclarations addedTopDecls
       spliceKey <- mkCapturedSpliceKey spliceKind spliceExpr
       dependentFiles <- getDependentFiles
       foreignFiles <- getForeignFiles
       liftIO $ do
         writeIORef dependentFilesRef dependentFiles
         writeIORef foreignFilesRef foreignFiles
-        modifyIORef' capturesRef (Map.insert spliceKey (mkSpliceResult renderedExpansion diagnostics))
+        modifyIORef' capturesRef (Map.insert spliceKey (mkSpliceResult renderedExpansion renderedAddedTopDecls diagnostics))
       pure expanded
 
 -- | Construct a captured splice result before module-level effects are attached.
-mkSpliceResult :: String -> [SpliceDiagnostic] -> SpliceResult
-mkSpliceResult renderedExpansion diagnostics =
+mkSpliceResult :: String -> String -> [SpliceDiagnostic] -> SpliceResult
+mkSpliceResult renderedExpansion renderedAddedTopDecls diagnostics =
   SpliceResult
     { spliceResultHaskell = renderedExpansion
     , spliceResultDependentFiles = []
     , spliceResultForeignFiles = []
+    , spliceResultAddedTopDecls = renderedAddedTopDecls
     , spliceResultDiagnostics = diagnostics
     }
 
--- | Evaluate one splice while separately recording TH diagnostics.
+-- | Evaluate one splice while separately recording replayable TH state.
 --
 -- Host GHC stores @reportWarning@ and @reportError@ in the current 'TcM'
 -- message bag. Temporarily clearing that bag gives us the messages produced by
 -- this splice alone; restoring the union afterwards keeps normal host
 -- compilation semantics intact.
-evaluateWithIsolatedDiagnostics :: TcM a -> TcM (a, [SpliceDiagnostic])
-evaluateWithIsolatedDiagnostics action = do
+--
+-- @addTopDecls@ similarly writes to a cumulative 'TcGblEnv' ref. Isolating it
+-- lets the worker capture declarations added by this splice without duplicating
+-- declarations added by earlier splices.
+evaluateWithIsolatedSpliceState :: TcM a -> TcM (a, [SpliceDiagnostic], [LHsDecl GhcPs])
+evaluateWithIsolatedSpliceState action = do
   errsVar <- getErrsVar
   previousMessages <- readTcRef errsVar
+  tcGblEnv <- getGblEnv
+  let topDeclsVar = tcg_th_topdecls tcGblEnv
+  previousTopDecls <- readTcRef topDeclsVar
   writeTcRef errsVar emptyMessages
+  writeTcRef topDeclsVar []
   result <- action
   spliceMessages <- readTcRef errsVar
+  addedTopDecls <- readTcRef topDeclsVar
   writeTcRef errsVar (spliceMessages `unionMessages` previousMessages)
-  pure (result, extractTHDiagnostics spliceMessages)
+  writeTcRef topDeclsVar (addedTopDecls <> previousTopDecls)
+  pure (result, extractTHDiagnostics spliceMessages, addedTopDecls)
 
 -- | Keep only diagnostics explicitly emitted by Template Haskell @report*@.
 extractTHDiagnostics :: Messages TcRnMessage -> [SpliceDiagnostic]
