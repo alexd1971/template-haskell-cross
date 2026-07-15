@@ -25,9 +25,15 @@ data TestCase = TestCase
   { testName :: !String
   , testModulePath :: !FilePath
   , testPluginOptions :: ![String]
+  , testExpectedExit :: !ExpectedExit
   , testStdoutOccurrences :: ![(String, Int)]
   , testStderrOccurrences :: ![(String, Int)]
   }
+
+data ExpectedExit
+  = ExpectSuccess
+  | ExpectFailure
+  deriving (Eq, Show)
 
 main :: IO ()
 main = do
@@ -45,6 +51,7 @@ main = do
                 [ "-fplugin=THCross.Plugin"
                 , "-fplugin-opt=THCross.Plugin:dummy-expr"
                 ]
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
@@ -54,6 +61,7 @@ main = do
             { testName = "worker expression splice"
             , testModulePath = "Example.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
@@ -63,6 +71,7 @@ main = do
             { testName = "worker module-aware reify"
             , testModulePath = "ReifyExpr.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
@@ -72,6 +81,7 @@ main = do
             { testName = "worker declaration ordering"
             , testModulePath = "DeclOrder.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
@@ -81,6 +91,7 @@ main = do
             { testName = "persistent worker reuse"
             , testModulePath = "DuplicateSplices.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences =
                 [ ("th-cross: started worker", 1)
                 , ("th-cross: reusing worker", 1)
@@ -96,6 +107,7 @@ main = do
             { testName = "dependent file propagation"
             , testModulePath = "DependentFile.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences =
                 [ ("th-cross: dependent file schema.json", 1)
                 ]
@@ -108,6 +120,7 @@ main = do
             { testName = "TH warning propagation"
             , testModulePath = "ReportWarning.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences = []
             , testStderrOccurrences =
                 [ ("host-side TH warning", 1)
@@ -119,6 +132,7 @@ main = do
             { testName = "host runIO execution"
             , testModulePath = "RunIO.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
@@ -129,6 +143,7 @@ main = do
             { testName = "host addTempFile execution"
             , testModulePath = "AddTempFile.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
@@ -138,6 +153,7 @@ main = do
             { testName = "TH recover semantics"
             , testModulePath = "Recover.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences = []
             , testStderrOccurrences =
                 [ ("expected recovered error", 0)
@@ -149,6 +165,7 @@ main = do
             { testName = "host Q state"
             , testModulePath = "GetPutQ.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences = []
             , testStderrOccurrences = []
             }
@@ -158,6 +175,7 @@ main = do
             { testName = "foreign file propagation"
             , testModulePath = "AddForeignFilePath.hs"
             , testPluginOptions = workerPluginOptions workerPath
+            , testExpectedExit = ExpectSuccess
             , testStdoutOccurrences =
                 [ ("th-cross: foreign file c cbits/th_foreign_file_path.c", 1)
                 ]
@@ -205,13 +223,21 @@ runCase projectRoot fixturesDir testCase = do
           <> testPluginOptions testCase
           <> [testModulePath testCase]
   (exitCode, out, err) <- readCreateProcessWithExitCode (inProject fixturesDir (proc "cabal" args)) ""
-  case exitCode of
-    ExitSuccess ->
-      checkOutputOccurrences "stdout" testCase out (testStdoutOccurrences testCase)
-        >> checkOutputOccurrences "stderr" testCase err (testStderrOccurrences testCase)
-    ExitFailure code -> do
+  checkExpectedExit testCase exitCode out err
+  checkOutputOccurrences "stdout" testCase out (testStdoutOccurrences testCase)
+  checkOutputOccurrences "stderr" testCase err (testStderrOccurrences testCase)
+
+checkExpectedExit :: TestCase -> ExitCode -> String -> String -> IO ()
+checkExpectedExit testCase exitCode out err =
+  case (testExpectedExit testCase, exitCode) of
+    (ExpectSuccess, ExitSuccess) ->
+      pure ()
+    (ExpectFailure, ExitFailure _) ->
+      pure ()
+    (expected, actual) -> do
       putStrLn ("integration test failed: " <> testName testCase)
-      putStrLn ("exit code: " <> show code)
+      putStrLn ("expected exit: " <> show expected)
+      putStrLn ("actual exit: " <> show actual)
       putStrLn "stdout:"
       putStr out
       putStrLn "stderr:"
