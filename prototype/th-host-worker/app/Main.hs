@@ -59,20 +59,19 @@ handleLine cache line =
 
 -- | Dispatch by splice kind.
 --
--- The prototype currently evaluates expression and declaration splices.
--- Annotation wrappers are served from captures produced while replaying
--- declaration splices with AnnD; they are intentionally same-GHC-version only.
+-- The prototype currently evaluates all basic splice kinds. Annotation wrappers
+-- are served from captures produced while replaying declaration splices with
+-- AnnD; they are intentionally same-GHC-version only.
 handleRequest :: EvaluationCache -> SpliceRequest -> IO SpliceResponse
 handleRequest cache request =
   case requestSpliceKind request of
     ExpressionSplice ->
       evaluateModuleSplice cache request
+    TypeSplice ->
+      evaluateModuleSplice cache request
+    PatternSplice ->
+      evaluateModuleSplice cache request
     DeclarationSplice ->
       evaluateModuleSplice cache request
     AnnotationWrapperSplice ->
       evaluateModuleSplice cache request
-    _ ->
-      pure $
-        SpliceError
-          (requestId request)
-          "th-host-worker MVP only supports expression, declaration, and annotation-wrapper splices"

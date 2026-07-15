@@ -64,7 +64,12 @@ import System.Process
   , createProcess
   , proc
   )
-import THCross.ParseFragment (parseDeclarationFragments, parseExpressionFragment)
+import THCross.ParseFragment
+  ( parseDeclarationFragments
+  , parseExpressionFragment
+  , parsePatternFragment
+  , parseTypeFragment
+  )
 import THCross.Protocol
   ( SpliceDiagnostic (..)
   , SpliceForeignFile (..)
@@ -139,18 +144,21 @@ loggingMetaHook workerState mode request spliceExpr = do
           generated <-
             evaluateWorkerDeclarationSplice tcGblEnv
           pure (wrap generated)
+    MetaP wrap
+      | WorkerMode{} <- mode -> do
+          generated <-
+            evaluateWorkerSplice tcGblEnv parsePatternFragment
+          pure (wrap generated)
+    MetaT wrap
+      | WorkerMode{} <- mode -> do
+          generated <-
+            evaluateWorkerSplice tcGblEnv parseTypeFragment
+          pure (wrap generated)
     MetaAW wrap
       | WorkerMode{} <- mode -> do
           annotationWrapper <-
             evaluateWorkerAnnotationWrapper tcGblEnv
           pure (wrap annotationWrapper)
-    _
-      | WorkerMode{} <- mode -> do
-          let err =
-                "worker mode currently supports only expression, declaration, and annotation-wrapper splices; got "
-                  <> spliceKindName
-          liftIO $ putStrLn ("unsupported-splice-kind: " <> err)
-          fail err
     _ -> defaultRunMeta request spliceExpr
   where
     spliceModuleName tcGblEnv =

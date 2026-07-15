@@ -22,6 +22,10 @@ testTrees testEnv =
           compileWithDummyExpr testEnv "DummyExpr.hs"
       , testCase "worker expression splice" $
           compileWithPlugin testEnv "Example.hs" expectSuccess
+      , testCase "worker type splice" $
+          compileWithPlugin testEnv "TypeSplice.hs" expectSuccess
+      , testCase "worker pattern splice" $
+          compileWithPlugin testEnv "PatternSplice.hs" expectSuccess
       , testCase "worker module-aware reify" $
           compileWithPlugin testEnv "ReifyExpr.hs" expectSuccess
       , testCase "worker declaration ordering" $

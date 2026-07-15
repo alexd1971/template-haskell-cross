@@ -34,10 +34,10 @@ declaration
 annotation-wrapper
 ```
 
-The current prototype supports `expression` and `declaration`.
-`annotation-wrapper` is supported only as an internal same-GHC-version helper
-for replaying annotation declarations produced by `addTopDecls`. Type and
-pattern splices are protocol values reserved for later implementation.
+The current prototype supports `expression`, `type`, `pattern`, and
+`declaration`. `annotation-wrapper` is supported only as an internal
+same-GHC-version helper for replaying annotation declarations produced by
+`addTopDecls`.
 
 ## Request
 

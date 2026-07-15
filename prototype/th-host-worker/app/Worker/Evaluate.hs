@@ -60,6 +60,8 @@ import GHC.Types.Meta
   , metaRequestAW
   , metaRequestD
   , metaRequestE
+  , metaRequestP
+  , metaRequestT
   )
 import GHC.Types.SrcLoc
   ( SrcSpan (..)
@@ -70,7 +72,8 @@ import GHC.Types.SrcLoc
   )
 import GHC.Unit.Module (moduleName, moduleNameString)
 import GHC.Utils.Outputable
-  ( SDoc
+  ( Outputable
+  , SDoc
   , defaultSDocContext
   , ppr
   , renderWithContext
@@ -260,26 +263,40 @@ captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta re
         captureSpliceResult
           ExpressionSplice
           (metaRequestE runMeta)
-          prettyExpandedExpression
       pure (wrap expanded)
     MetaD wrap -> do
       expanded <-
-        captureSpliceResult
+        captureDeclarationSpliceResult
           DeclarationSplice
           (metaRequestD runMeta)
-          prettyExpandedDeclarations
+      pure (wrap expanded)
+    MetaP wrap -> do
+      expanded <-
+        captureSpliceResult
+          PatternSplice
+          (metaRequestP runMeta)
+      pure (wrap expanded)
+    MetaT wrap -> do
+      expanded <-
+        captureSpliceResult
+          TypeSplice
+          (metaRequestT runMeta)
       pure (wrap expanded)
     MetaAW wrap -> do
       serialized <-
         captureAnnotationWrapper
           (metaRequestAW runMeta)
       pure (wrap serialized)
-    _ ->
-      runMeta request spliceExpr
   where
     runMeta = fromMaybe defaultRunMeta previousRunMeta
 
-    captureSpliceResult spliceKind evaluateSplice renderExpanded = do
+    captureSpliceResult spliceKind evaluateSplice =
+      captureRenderedSpliceResult spliceKind evaluateSplice prettyExpanded
+
+    captureDeclarationSpliceResult spliceKind evaluateSplice =
+      captureRenderedSpliceResult spliceKind evaluateSplice prettyExpandedDeclarations
+
+    captureRenderedSpliceResult spliceKind evaluateSplice renderExpanded = do
       (expanded, diagnostics, addedTopDecls) <-
         evaluateWithIsolatedSpliceState (evaluateSplice spliceExpr)
       renderedExpansion <- renderExpanded expanded
@@ -398,17 +415,16 @@ mkCapturedSpliceKey spliceKind spliceExpr = do
       spliceKindName = spliceKindToStr spliceKind
   pure (mkSpliceKey spliceModuleName spliceKindName (sourceSpanKeyText sourceSpan))
 
--- | Convert a generated expression AST back to textual Haskell for the wire
--- format.
-prettyExpandedExpression :: LHsExpr GhcPs -> TcM String
-prettyExpandedExpression =
+-- | Convert a generated AST node back to textual Haskell for the wire format.
+prettyExpanded :: Outputable a => a -> TcM String
+prettyExpanded =
   pure . renderHaskell . ppr
 
 -- | Convert generated declaration ASTs back to textual Haskell for the wire
 -- format.
 prettyExpandedDeclarations :: [LHsDecl GhcPs] -> TcM String
 prettyExpandedDeclarations =
-  pure . unlines . map (renderHaskell . ppr)
+  fmap unlines . mapM prettyExpanded
 
 -- | Render Haskell without GHC-generated uniques.
 --

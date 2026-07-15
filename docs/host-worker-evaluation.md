@@ -133,17 +133,13 @@ then `reify ''GeneratedUser`.
 
 Still unsupported:
 
-- persistent worker sessions;
-- whole-module expansion caching;
-- type and pattern splices over the worker protocol;
 - target-only modules/imports;
 - target-like CPP/package configuration;
-- `Q` side-effect replay;
-- stable splice keys.
+- complete `Q` side-effect replay;
 
-The cross-side plugin now routes expression and declaration splices through the
-worker in worker mode. Other splice kinds fail explicitly instead of falling
-back to local `defaultRunMeta`.
+The cross-side plugin now routes expression, type, pattern, and declaration
+splices through the worker in worker mode. Annotation-wrapper requests are used
+internally for same-GHC-version annotation replay.
 
 ## Operational Notes
 

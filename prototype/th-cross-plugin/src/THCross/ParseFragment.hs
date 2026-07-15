@@ -6,6 +6,8 @@
 module THCross.ParseFragment
   ( parseDeclarationFragments
   , parseExpressionFragment
+  , parsePatternFragment
+  , parseTypeFragment
   ) where
 
 import GHC.Data.FastString (mkFastString)
@@ -18,8 +20,8 @@ import GHC.Driver.DynFlags
   , targetPlatform
   )
 import GHC.Driver.Session (safeImportsOn, supportedLanguagesAndExtensions)
-import GHC.Hs (GhcPs, HsModule (..), LHsDecl, LHsExpr)
-import GHC.Parser (parseExpression, parseModule)
+import GHC.Hs (GhcPs, HsModule (..), LHsDecl, LHsExpr, LHsType, LPat)
+import GHC.Parser (parseExpression, parseModule, parsePattern, parseType)
 import GHC.Parser.Lexer
   ( P
   , PState
@@ -47,6 +49,20 @@ parseExpressionFragment source = do
   runParserFragment dflags "<expression-fragment>" source $ do
     ecp <- parseExpression
     runPV (unECP ecp :: PV (LHsExpr GhcPs))
+
+-- | Parse a Haskell pattern fragment into the parser-stage AST expected by
+-- 'MetaP' in 'runMetaHook'.
+parsePatternFragment :: String -> TcM (LPat GhcPs)
+parsePatternFragment source = do
+  dflags <- getDynFlags
+  runParserFragment dflags "<pattern-fragment>" source parsePattern
+
+-- | Parse a Haskell type fragment into the parser-stage AST expected by
+-- 'MetaT' in 'runMetaHook'.
+parseTypeFragment :: String -> TcM (LHsType GhcPs)
+parseTypeFragment source = do
+  dflags <- getDynFlags
+  runParserFragment dflags "<type-fragment>" source parseType
 
 -- | Parse zero or more top-level declaration fragments into parser-stage AST.
 --
