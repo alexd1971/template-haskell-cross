@@ -137,6 +137,8 @@ Still unsupported:
 - target-like CPP/package configuration;
 - complete `Q` side-effect replay;
 
+Target context limitations are detailed in `docs/target-context.md`.
+
 The cross-side plugin now routes expression, type, pattern, and declaration
 splices through the worker in worker mode. Annotation-wrapper requests are used
 internally for same-GHC-version annotation replay.
