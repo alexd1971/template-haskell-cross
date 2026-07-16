@@ -239,3 +239,6 @@ declarations that TH can observe.
 Before Android/iOS integration, implement explicit context passing from the
 cross build plan to the host worker. Without that, `reify` can observe the wrong
 module shape.
+
+For modules that native GHC cannot load at all because of target-only imports,
+packages, or FFI assumptions, see `docs/target-only-modules.md`.

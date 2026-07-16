@@ -137,7 +137,9 @@ Still unsupported:
 - target-like CPP/package configuration;
 - complete `Q` side-effect replay;
 
-Target context limitations are detailed in `docs/target-context.md`.
+Target context limitations are detailed in `docs/target-context.md`. Modules
+that native GHC cannot load at all are covered by
+`docs/target-only-modules.md`.
 
 The cross-side plugin now routes expression, type, pattern, and declaration
 splices through the worker in worker mode. Annotation-wrapper requests are used
