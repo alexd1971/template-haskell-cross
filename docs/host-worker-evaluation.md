@@ -143,7 +143,8 @@ that native GHC cannot load at all are covered by
 
 The cross-side plugin now routes expression, type, pattern, and declaration
 splices through the worker in worker mode. Annotation-wrapper requests are used
-internally for same-GHC-version annotation replay.
+internally for annotation replay; cross-version compatibility is conditional and
+covered by the explicit probes in `docs/cross-version.md`.
 
 ## Operational Notes
 
@@ -167,3 +168,64 @@ used by test files.
 Generated declarations are pretty-printed with `sdocSuppressUniques = True`.
 Without this, GHC can print names like `GeneratedUser_a2aU`, which are valid
 debug output but wrong as textual Haskell returned to the cross-side parser.
+
+## Declaration Rendering Limitation
+
+The prototype currently serializes generated declarations by applying GHC's
+normal `ppr` to `LHsDecl GhcPs` and reparsing the resulting text on the
+consumer side.
+
+This is not guaranteed to be parser-roundtrippable. A concrete failing case is
+an annotation declaration with a type signature:
+
+```haskell
+{-# ANN module (42 :: Int) #-}
+```
+
+GHC 9.8.4 can pretty-print the generated declaration as:
+
+```haskell
+{-# ANN module 42 :: GHC.Types.Int #-}
+```
+
+That text is useful diagnostic output, but it is not accepted by the parser as
+a declaration fragment. The parser expects parentheses around the annotated
+expression when it contains a type signature.
+
+This affects mixed paths such as:
+
+```text
+expression splice
+  -> addTopDecls [annotation declaration]
+  -> worker pretty-prints added declaration
+  -> consumer reparses added declaration
+```
+
+It does not invalidate the separate `MetaAW` binary compatibility probe in
+`docs/cross-version.md`, because direct source annotations exercise
+`MetaAW` without first going through declaration pretty-print/reparse.
+
+### Source-like Printer Investigation
+
+GHC 9.8.4 exposes `GHC.Parser.Annotation`, but does not expose a general
+source-like printer that can turn generated `GhcPs` declarations into guaranteed
+parser-roundtrippable source.
+
+HLS uses `ghc-exactprint` for source-preserving rewrites, but for generated AST
+nodes its annotation path still starts from:
+
+```haskell
+render dflags = showSDoc dflags . ppr
+```
+
+and then reparses that rendered text to compute exact-print annotations. That
+does not solve cases where `ppr` itself is not parser-roundtrippable.
+
+Current decision:
+
+- keep generic declaration rendering as an MVP limitation;
+- prefer direct textual splice results for normal declaration splices;
+- treat `addTopDecls` declaration replay as best-effort until a more robust
+  source renderer or targeted declaration renderer is implemented;
+- if needed, handle specific declaration constructors such as `AnnD` with
+  targeted source rendering rather than assuming generic `ppr` is source.
