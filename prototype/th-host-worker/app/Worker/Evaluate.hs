@@ -15,6 +15,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Word (Word8)
 import System.Directory (createDirectoryIfMissing)
+import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
 import GHC
   ( Ghc
@@ -222,12 +223,15 @@ hostWorkerBuildDir =
 
 -- | Locate the native GHC library directory used to initialize 'runGhc'.
 --
--- The prototype shells out to @ghc --print-libdir@ so the worker uses the same
--- GHC installation that built/runs it. A packaged version should make this more
--- explicit.
+-- Packaged environments should set @TH_HOST_GHC_LIBDIR@ so the worker does not
+-- accidentally discover the consumer GHC from @PATH@. The @ghc --print-libdir@
+-- fallback keeps the manually built prototype convenient to run.
 getGhcLibDir :: IO FilePath
-getGhcLibDir =
-  trimTrailingNewline <$> readProcess "ghc" ["--print-libdir"] ""
+getGhcLibDir = do
+  explicitLibDir <- lookupEnv "TH_HOST_GHC_LIBDIR"
+  case explicitLibDir of
+    Just libDir -> pure libDir
+    Nothing -> trimTrailingNewline <$> readProcess "ghc" ["--print-libdir"] ""
 
 -- | Install a host-only hook that delegates to the previous hook/default GHC
 -- evaluator, records the generated splice, and returns it unchanged.

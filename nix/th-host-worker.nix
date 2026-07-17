@@ -1,36 +1,20 @@
-{ mkDerivation
-, base
-, binary
-, bytestring
-, containers
-, directory
-, filepath
-, ghc
-, ghc-boot
-, ghci
-, lib
-, process
+{ callPackage
+, haskellLib
+, hostGhcLibDir
+, makeWrapper
 , th-cross-plugin
 }:
 
-mkDerivation {
-  pname = "th-host-worker";
-  version = "0.1.0.0";
-  src = ../prototype/th-host-worker;
-  isLibrary = false;
-  isExecutable = true;
-  executableHaskellDepends = [
-    base
-    binary
-    bytestring
-    containers
-    directory
-    filepath
-    ghc
-    ghc-boot
-    ghci
-    process
-    th-cross-plugin
-  ];
-  license = lib.licenses.bsd3;
-}
+haskellLib.overrideCabal
+  (callPackage ./generated/th-host-worker.nix {
+    inherit th-cross-plugin;
+  })
+  (old: {
+    buildTools = (old.buildTools or [ ]) ++ [
+      makeWrapper
+    ];
+    postInstall = (old.postInstall or "") + ''
+      wrapProgram "$out/bin/th-host-worker" \
+        --set TH_HOST_GHC_LIBDIR "${hostGhcLibDir}"
+    '';
+  })

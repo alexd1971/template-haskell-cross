@@ -154,9 +154,19 @@ The worker calls:
 ghc --print-libdir
 ```
 
-and passes that path to `runGhc`. Without this, an executable launched from
-`dist-newstyle` can make `runGhc Nothing` look for `lib/settings` relative to
-the worker binary.
+and passes that path to `runGhc`. Packaged environments can override this with:
+
+```text
+TH_HOST_GHC_LIBDIR=/path/to/host/ghc/libdir
+```
+
+The override is important when the worker runs inside a different consumer GHC
+environment. For example, a worker built with GHC 9.8.4 may be launched while
+the consumer package is being built with GHC 9.10.3. In that case discovering
+`ghc` from `PATH` would find the wrong compiler libdir.
+
+Without an explicit libdir, an executable launched from `dist-newstyle` can also
+make `runGhc Nothing` look for `lib/settings` relative to the worker binary.
 
 The worker also enables `Opt_ForceRecomp` in the native GHC session so cached
 `.hi`/`.o` files do not bypass TH execution and leave the capture list empty.

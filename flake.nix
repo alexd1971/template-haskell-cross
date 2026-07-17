@@ -20,10 +20,15 @@
           ghc984 = pkgs.haskell.packages.ghc984.override {
             overrides = selfH: superH: {
               th-cross-plugin =
-                pkgs.haskell.lib.dontCheck
-                  (selfH.callPackage ./nix/th-cross-plugin.nix { });
+                pkgs.callPackage ./nix/th-cross-plugin.nix {
+                  callPackage = selfH.callPackage;
+                  haskellLib = pkgs.haskell.lib;
+                };
               th-host-worker =
-                selfH.callPackage ./nix/th-host-worker.nix {
+                pkgs.callPackage ./nix/th-host-worker.nix {
+                  callPackage = selfH.callPackage;
+                  haskellLib = pkgs.haskell.lib;
+                  hostGhcLibDir = "${pkgs.haskell.compiler.ghc984}/lib/ghc-9.8.4/lib";
                   th-cross-plugin = selfH.th-cross-plugin;
                 };
             };
@@ -32,8 +37,17 @@
           ghc9103 = pkgs.haskell.packages.ghc9103.override {
             overrides = selfH: superH: {
               th-cross-plugin =
-                pkgs.haskell.lib.dontCheck
-                  (selfH.callPackage ./nix/th-cross-plugin.nix { });
+                pkgs.callPackage ./nix/th-cross-plugin.nix {
+                  callPackage = selfH.callPackage;
+                  haskellLib = pkgs.haskell.lib;
+                };
+              th-consumer-example =
+                pkgs.callPackage ./nix/th-consumer-example.nix {
+                  callPackage = selfH.callPackage;
+                  haskellLib = pkgs.haskell.lib;
+                  th-cross-plugin = selfH.th-cross-plugin;
+                  th-host-worker = ghc984.th-host-worker;
+                };
             };
           };
         in
@@ -54,6 +68,7 @@
           th-cross-plugin-ghc984 = hs.ghc984.th-cross-plugin;
           th-cross-plugin-ghc9103 = hs.ghc9103.th-cross-plugin;
           consumer-ghc9103 = hs.consumerGhc9103;
+          th-consumer-example = hs.ghc9103.th-consumer-example;
 
           default = hs.ghc984.th-host-worker;
         });
@@ -65,13 +80,16 @@
               set -euo pipefail
 
               repo_root="$PWD"
-              mkdir -p "$repo_root/nix"
+              mkdir -p "$repo_root/nix/generated"
 
               ${pkgs.cabal2nix}/bin/cabal2nix "$repo_root/prototype/th-cross-plugin" \
-                > "$repo_root/nix/th-cross-plugin.nix"
+                > "$repo_root/nix/generated/th-cross-plugin.nix"
 
               ${pkgs.cabal2nix}/bin/cabal2nix "$repo_root/prototype/th-host-worker" \
-                > "$repo_root/nix/th-host-worker.nix"
+                > "$repo_root/nix/generated/th-host-worker.nix"
+
+              ${pkgs.cabal2nix}/bin/cabal2nix "$repo_root/prototype/th-consumer-example" \
+                > "$repo_root/nix/generated/th-consumer-example.nix"
             '';
           in
           {
@@ -113,6 +131,8 @@
 
               touch "$out"
             '';
+
+          consumer-package = hs.ghc9103.th-consumer-example;
         });
 
       devShells = forAllSystems (pkgs: {
