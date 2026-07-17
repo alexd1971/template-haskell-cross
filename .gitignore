@@ -1,4 +1,6 @@
 dist-newstyle/
+dist-newstyle-nix/
+.cabal-store-nix/
 *.hi
 *.o
 *.dyn_hi
