@@ -44,8 +44,10 @@ packages.${system}.th-cross-plugin-ghc984
 packages.${system}.th-cross-plugin-ghc9103
 packages.${system}.consumer-ghc9103
 packages.${system}.th-consumer-example
+packages.${system}.aarch64-linux-cross-probe
 checks.${system}.cross-version-plugin
 checks.${system}.consumer-package
+checks.${system}.cross-target-probe-aarch64-linux
 devShells.${system}.default
 apps.${system}.regen-cabal-nix
 ```
@@ -66,6 +68,9 @@ host architecture:
   The Nix derivation injects those flags into the library component
   `ghc-options` so Cabal's configure-time compiler sanity check does not try to
   load the plugin before package dependencies are registered.
+- `aarch64-linux-cross-probe` records the plain nixpkgs
+  `pkgsCross.aarch64-multiplatform` split without pretending that a real GHC
+  9.8.4 target package set is available there.
 
 The Nix worker derivation wraps `th-host-worker` with:
 
@@ -119,6 +124,13 @@ Build the package-level consumer example:
 
 ```bash
 nix build .#th-consumer-example
+```
+
+Inspect the plain nixpkgs aarch64-linux cross probe:
+
+```bash
+nix build .#aarch64-linux-cross-probe
+cat result
 ```
 
 Run the local cross-version check:
@@ -180,6 +192,24 @@ th-consumer-example> th-host-worker: cache miss src/Example.hs
 `th-consumer-example` disables library profiling in its Nix derivation so the
 check does not compile a separate profiling object variant and does not execute
 the same splice a second time only for `*.p_o` output.
+
+Observed cross-probe output:
+
+```text
+buildPlatform=x86_64-unknown-linux-gnu
+targetHostPlatform=aarch64-unknown-linux-gnu
+hostWorkerGhc=9.8.4
+targetGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
+nextStep=use haskell.nix or another cross-GHC provider for a real targetHaskellPkgs
+```
+
+This check is intentionally not a Haskell cross build. It records the current
+plain nixpkgs limitation: evaluating target-side GHC 9.8.4 in
+`pkgsCross.aarch64-multiplatform` fails with nixpkgs' own
+`GHC >= 9.6 can't be cross-compiled` error. The useful part for the prototype is
+that `buildPackages` still provides a native GHC 9.8.4 side, which is the right
+place for the host worker. A real `targetHaskellPkgs` needs haskell.nix or
+another provider that can supply the cross GHC/package set.
 
 Enter a shell with both GHC versions and cabal:
 
@@ -252,7 +282,9 @@ After the local Nix proof works, the next Nix integration step should replace or
 supplement `consumerHaskellPkgs` with a real target package set:
 
 - a native host package set for `th-host-worker`;
-- a target package set for the consumer package and `THCross.Plugin`;
+- a target package set for the consumer package;
+- a compiler-plugin package database built for the compiler process, not for
+  target runtime code;
 - plugin configuration that passes:
 
 ```text

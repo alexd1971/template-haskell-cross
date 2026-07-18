@@ -63,6 +63,23 @@
             hpkgs.th-cross-plugin
           ]);
         };
+
+      mkAarch64LinuxCrossProbe = pkgs:
+        let
+          targetPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+        in
+        pkgs.runCommand
+          "th-cross-aarch64-linux-cross-probe"
+          { }
+          ''
+            cat > "$out" <<'EOF'
+buildPlatform=${pkgs.stdenv.hostPlatform.config}
+targetHostPlatform=${targetPkgs.stdenv.hostPlatform.config}
+hostWorkerGhc=${targetPkgs.buildPackages.haskell.compiler.ghc984.version}
+targetGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
+nextStep=use haskell.nix or another cross-GHC provider for a real targetHaskellPkgs
+EOF
+          '';
     in
     {
       packages = forAllSystems (pkgs:
@@ -75,6 +92,7 @@
           th-cross-plugin-ghc9103 = hs.consumerHaskellPkgs.th-cross-plugin;
           consumer-ghc9103 = hs.consumerGhc;
           th-consumer-example = hs.consumerHaskellPkgs.th-consumer-example;
+          aarch64-linux-cross-probe = mkAarch64LinuxCrossProbe pkgs;
 
           default = hs.hostHaskellPkgs.th-host-worker;
         });
@@ -139,6 +157,7 @@
             '';
 
           consumer-package = hs.consumerHaskellPkgs.th-consumer-example;
+          cross-target-probe-aarch64-linux = mkAarch64LinuxCrossProbe pkgs;
         });
 
       devShells = forAllSystems (pkgs: {
