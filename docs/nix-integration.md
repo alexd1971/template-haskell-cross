@@ -42,16 +42,18 @@ be introduced later as a separate target package set.
 `flake.nix` exposes:
 
 ```text
-packages.${system}.th-host-worker
-packages.${system}.th-cross-plugin-ghc984
-packages.${system}.th-cross-plugin-ghc948
-packages.${system}.th-cross-plugin-ghc9103
-packages.${system}.consumer-ghc9103
-packages.${system}.th-consumer-example
+packages.${system}.host-ghc984-worker
+packages.${system}.host-ghc984-plugin
+packages.${system}.consumer-ghc948-plugin
+packages.${system}.consumer-ghc948-ghc
+packages.${system}.consumer-ghc9103-plugin
+packages.${system}.consumer-ghc9103-ghc
+packages.${system}.consumer-ghc9103-package
 packages.${system}.aarch64-linux-cross-probe
-checks.${system}.cross-version-plugin
-checks.${system}.consumer-package
-checks.${system}.consumer-plugin-ghc948
+checks.${system}.consumer-ghc9103-worker-smoke
+checks.${system}.consumer-ghc9103-package
+checks.${system}.consumer-ghc948-plugin
+checks.${system}.consumer-ghc948-worker-smoke
 checks.${system}.cross-target-probe-aarch64-linux
 devShells.${system}.default
 apps.${system}.regen-cabal-nix
@@ -60,17 +62,21 @@ apps.${system}.regen-cabal-nix
 The package split mirrors the intended cross architecture, but still runs on one
 host architecture:
 
-- `th-host-worker` comes from `hostHaskellPkgs` and is built with GHC 9.8.4;
-- `th-cross-plugin-ghc948` is a native GHC 9.4.8 compatibility build for the
+- `host-ghc984-worker` comes from `hostHaskellPkgs` and is built with GHC 9.8.4;
+- `host-ghc984-plugin` is the GHC 9.8.4 plugin build used by the local
+  prototype;
+- `consumer-ghc948-plugin` is a native GHC 9.4.8 compatibility build for the
   consumer-side plugin;
-- `th-cross-plugin-ghc9103` comes from `consumerGhc9103HaskellPkgs` and is
-  built with GHC 9.10.3;
-- `consumer-ghc9103` is a `consumerGhc9103HaskellPkgs` GHC environment containing
+- `consumer-ghc948-ghc` is a GHC 9.4.8 environment containing
   `th-cross-plugin`;
-- `checks.${system}.cross-version-plugin` compiles `Example.hs` with
-  `consumer-ghc9103` and passes the Nix-built GHC 9.8.4 worker path to the
+- `consumer-ghc9103-plugin` comes from `consumerGhc9103HaskellPkgs` and is
+  built with GHC 9.10.3;
+- `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
+  containing `th-cross-plugin`;
+- `checks.${system}.consumer-ghc9103-worker-smoke` compiles `Example.hs` with
+  `consumer-ghc9103-ghc` and passes the Nix-built GHC 9.8.4 worker path to the
   plugin.
-- `th-consumer-example` is a minimal Cabal package from
+- `consumer-ghc9103-package` is a minimal Cabal package from
   `consumerGhc9103HaskellPkgs`,
   configured with `THCross.Plugin` plus the Nix-built GHC 9.8.4 worker path.
   The Nix derivation injects those flags into the library component
@@ -106,26 +112,32 @@ the consumer example.
 The existing Cabal integration test expects the repository-level
 `prototype/cabal.project`, which is not present in the isolated source tree used
 by the package derivation. Nix-level validation is handled by
-`checks.${system}.cross-version-plugin` instead.
+`checks.${system}.consumer-ghc9103-worker-smoke` instead.
 
 ## Commands
 
 Build the native worker:
 
 ```bash
-nix build .#th-host-worker
+nix build .#host-ghc984-worker
 ```
 
 Build the consumer-side plugin with GHC 9.10.3:
 
 ```bash
-nix build .#th-cross-plugin-ghc9103
+nix build .#consumer-ghc9103-plugin
 ```
 
 Build the consumer-side plugin with GHC 9.4.8:
 
 ```bash
-nix build .#th-cross-plugin-ghc948
+nix build .#consumer-ghc948-plugin
+```
+
+Build the GHC 9.4.8 consumer environment:
+
+```bash
+nix build .#consumer-ghc948-ghc
 ```
 
 The same build is also part of:
@@ -134,16 +146,22 @@ The same build is also part of:
 nix flake check
 ```
 
+Run the GHC 9.4.8 consumer plugin smoke test against the GHC 9.8.4 worker:
+
+```bash
+nix build .#checks.x86_64-linux.consumer-ghc948-worker-smoke -L
+```
+
 Build the consumer GHC environment:
 
 ```bash
-nix build .#consumer-ghc9103
+nix build .#consumer-ghc9103-ghc
 ```
 
 Build the package-level consumer example:
 
 ```bash
-nix build .#th-consumer-example
+nix build .#consumer-ghc9103-package
 ```
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
@@ -171,15 +189,15 @@ This app is intended for repository maintenance. It writes generated files under
 Observed check output:
 
 ```text
-th-cross-cross-version-plugin-check> th-cross: intercepted Template Haskell splice
-th-cross-cross-version-plugin-check> module: Example
-th-cross-cross-version-plugin-check> kind: expression
-th-cross-cross-version-plugin-check> splice-key: db5b38a182e7327256576d7231cf0980
-th-cross-cross-version-plugin-check> location: /nix/store/...-Example.hs:6:8-17
-th-cross-cross-version-plugin-check> expression: ([| 42 |])
-th-cross-cross-version-plugin-check> worker: /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
-th-cross-cross-version-plugin-check> th-cross: started worker /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
-th-cross-cross-version-plugin-check> th-host-worker: cache miss /nix/store/...-Example.hs
+th-cross-consumer-ghc9103-worker-smoke> th-cross: intercepted Template Haskell splice
+th-cross-consumer-ghc9103-worker-smoke> module: Example
+th-cross-consumer-ghc9103-worker-smoke> kind: expression
+th-cross-consumer-ghc9103-worker-smoke> splice-key: db5b38a182e7327256576d7231cf0980
+th-cross-consumer-ghc9103-worker-smoke> location: /nix/store/...-Example.hs:6:8-17
+th-cross-consumer-ghc9103-worker-smoke> expression: ([| 42 |])
+th-cross-consumer-ghc9103-worker-smoke> worker: /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
+th-cross-consumer-ghc9103-worker-smoke> th-cross: started worker /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
+th-cross-consumer-ghc9103-worker-smoke> th-host-worker: cache miss /nix/store/...-Example.hs
 ```
 
 This confirms the local Nix wiring:

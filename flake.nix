@@ -72,6 +72,9 @@
           consumerGhc9103 = consumerGhc9103HaskellPkgs.ghcWithPackages (hpkgs: [
             hpkgs.th-cross-plugin
           ]);
+          consumerGhc948 = consumerGhc948HaskellPkgs.ghcWithPackages (hpkgs: [
+            hpkgs.th-cross-plugin
+          ]);
         };
 
       mkAarch64LinuxCrossProbe = pkgs:
@@ -98,12 +101,13 @@ EOF
           hs = mkHaskellPkgs pkgs;
         in
         {
-          th-host-worker = hs.hostHaskellPkgs.th-host-worker;
-          th-cross-plugin-ghc984 = hs.hostHaskellPkgs.th-cross-plugin;
-          th-cross-plugin-ghc9103 = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
-          th-cross-plugin-ghc948 = hs.consumerGhc948HaskellPkgs.th-cross-plugin;
-          consumer-ghc9103 = hs.consumerGhc9103;
-          th-consumer-example = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
+          host-ghc984-worker = hs.hostHaskellPkgs.th-host-worker;
+          host-ghc984-plugin = hs.hostHaskellPkgs.th-cross-plugin;
+          consumer-ghc9103-plugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
+          consumer-ghc948-plugin = hs.consumerGhc948HaskellPkgs.th-cross-plugin;
+          consumer-ghc9103-ghc = hs.consumerGhc9103;
+          consumer-ghc948-ghc = hs.consumerGhc948;
+          consumer-ghc9103-package = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
           aarch64-linux-cross-probe = mkAarch64LinuxCrossProbe pkgs;
 
           default = hs.hostHaskellPkgs.th-host-worker;
@@ -141,8 +145,8 @@ EOF
           packages = self.packages.${pkgs.stdenv.hostPlatform.system};
         in
         {
-          cross-version-plugin = pkgs.runCommand
-            "th-cross-cross-version-plugin-check"
+          consumer-ghc9103-worker-smoke = pkgs.runCommand
+            "th-cross-consumer-ghc9103-worker-smoke"
             {
               nativeBuildInputs = [
                 pkgs.haskell.compiler.ghc984
@@ -162,14 +166,40 @@ EOF
                 -odir "$build_dir" \
                 -stubdir "$build_dir" \
                 -fplugin=THCross.Plugin \
-                -fplugin-opt=THCross.Plugin:worker=${packages.th-host-worker}/bin/th-host-worker \
+                -fplugin-opt=THCross.Plugin:worker=${packages.host-ghc984-worker}/bin/th-host-worker \
                 ${./prototype/th-cross-plugin/test/fixtures/Example.hs}
 
               touch "$out"
             '';
 
-          consumer-package = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
-          consumer-plugin-ghc948 = hs.consumerGhc948HaskellPkgs.th-cross-plugin;
+          consumer-ghc9103-package = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
+          consumer-ghc948-plugin = hs.consumerGhc948HaskellPkgs.th-cross-plugin;
+          consumer-ghc948-worker-smoke = pkgs.runCommand
+            "th-cross-consumer-ghc948-worker-smoke"
+            {
+              nativeBuildInputs = [
+                pkgs.haskell.compiler.ghc984
+              ];
+            }
+            ''
+              build_dir="$TMPDIR/consumer-ghc948-build"
+              mkdir -p "$build_dir"
+
+              ${hs.consumerGhc948}/bin/ghc \
+                -v0 \
+                -fno-code \
+                -fforce-recomp \
+                -i${./prototype/th-cross-plugin/test/fixtures} \
+                -outputdir "$build_dir" \
+                -hidir "$build_dir" \
+                -odir "$build_dir" \
+                -stubdir "$build_dir" \
+                -fplugin=THCross.Plugin \
+                -fplugin-opt=THCross.Plugin:worker=${packages.host-ghc984-worker}/bin/th-host-worker \
+                ${./prototype/th-cross-plugin/test/fixtures/Example.hs}
+
+              touch "$out"
+            '';
           cross-target-probe-aarch64-linux = mkAarch64LinuxCrossProbe pkgs;
         });
 
@@ -191,6 +221,14 @@ EOF
 
             ghc9103PkgWrapper = pkgs.writeShellScriptBin "ghc-9.10.3-pkg" ''
               exec ${hs.consumerGhc9103}/bin/ghc-pkg "$@"
+            '';
+
+            ghc948Wrapper = pkgs.writeShellScriptBin "ghc-9.4.8" ''
+              exec ${hs.consumerGhc948}/bin/ghc "$@"
+            '';
+
+            ghc948PkgWrapper = pkgs.writeShellScriptBin "ghc-9.4.8-pkg" ''
+              exec ${hs.consumerGhc948}/bin/ghc-pkg "$@"
             '';
 
             thCrossBuild = pkgs.writeShellScriptBin "th-cross-build" ''
@@ -232,6 +270,8 @@ EOF
               pkgs.cabal-install
               ghc984Wrapper
               ghc984PkgWrapper
+              ghc948Wrapper
+              ghc948PkgWrapper
               ghc9103Wrapper
               ghc9103PkgWrapper
               thCrossBuild
@@ -250,6 +290,7 @@ TH cross dev shell
 
 Compilers:
   ghc-9.8.4       host worker / normal prototype build
+  ghc-9.4.8       consumer-side plugin compatibility checks
   ghc-9.10.3      consumer-side plugin compatibility checks
 
 Helpers:

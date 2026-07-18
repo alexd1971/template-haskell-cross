@@ -191,13 +191,15 @@ introducing a small custom diagnostic type and wrapping it with
 `flake.nix` exposes a native GHC 9.4.8 plugin build:
 
 ```text
-packages.x86_64-linux.th-cross-plugin-ghc948
+packages.x86_64-linux.consumer-ghc948-plugin
+packages.x86_64-linux.consumer-ghc948-ghc
+checks.x86_64-linux.consumer-ghc948-worker-smoke
 ```
 
 Run:
 
 ```bash
-nix build .#th-cross-plugin-ghc948 -L
+nix build .#consumer-ghc948-plugin -L
 ```
 
 This currently succeeds. The first API issue encountered was:
@@ -225,9 +227,43 @@ For now, GHC 9.4.8 diagnostics replay is intentionally minimal:
 This is enough for the first plugin build and simple splice-flow checks, but it
 is not yet equivalent to the GHC 9.8+ diagnostics replay.
 
-## Preliminary Conclusion
+The smoke test compiles the existing simple expression fixture with GHC 9.4.8,
+loads the GHC 9.4.8 build of `THCross.Plugin`, and points it at the native GHC
+9.8.4 worker:
 
-GHC 9.4.8 looks plausible as a consumer-side target for the textual protocol:
+```bash
+nix build .#checks.x86_64-linux.consumer-ghc948-worker-smoke -L
+```
+
+The expected path is:
+
+```text
+GHC 9.4.8 consumer
+  -> THCross.Plugin built with GHC 9.4.8
+  -> th-host-worker built with GHC 9.8.4
+  -> textual Haskell fragment
+  -> GHC 9.4.8 parser
+```
+
+## Confirmed Result
+
+The tested mechanism works for a simple expression splice with different
+consumer and host-worker GHC versions:
+
+```text
+GHC 9.4.8 consumer
+  -> THCross.Plugin built with GHC 9.4.8
+  -> th-host-worker built with GHC 9.8.4
+  -> textual Haskell fragment
+  -> GHC 9.4.8 parser
+```
+
+This confirms that the textual-fragment protocol does not require the consumer
+plugin and the host worker to be built with the same GHC version for this tested
+case.
+
+The source/API checks also confirm that GHC 9.4.8 has the pieces needed by the
+current prototype:
 
 - `runMetaHook` exists;
 - `MetaHook` has the same essential shape;
@@ -235,9 +271,14 @@ GHC 9.4.8 looks plausible as a consumer-side target for the textual protocol:
 - parser entrypoints needed by expression/type/pattern/declaration fragment
   parsing are present;
 - the plugin library now builds with native GHC 9.4.8 through Nix;
-- diagnostics replay still needs proper compatibility code;
-- the host worker can remain GHC 9.8.4.
+- the native GHC 9.4.8 smoke test exercises the existing GHC 9.8.4 host worker.
 
-The next implementation step should be a native GHC 9.4.8 plugin smoke test
-with the GHC 9.8.4 host worker before attempting target-side
+Current limitations:
+
+- only the tested expression-splice path is confirmed;
+- diagnostics replay for GHC 9.4.8 is intentionally minimal;
+- annotation binary replay is not covered by this compatibility check;
+- real cross-target package sets still need separate validation.
+
+The next implementation step should be trying the same setup through
 `pkgsCross.aarch64-multiplatform.haskell.packages.ghc948`.

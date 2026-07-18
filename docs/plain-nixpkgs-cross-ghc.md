@@ -158,7 +158,7 @@ See `docs/ghc-9.4.8-consumer-plugin.md` for the first consumer-side GHC 9.4.8
 API check. The plugin library now builds natively with GHC 9.4.8 through:
 
 ```bash
-nix build .#th-cross-plugin-ghc948
+nix build .#consumer-ghc948-plugin
 ```
 
 The next step is a native GHC 9.4.8 plugin smoke test against the existing GHC
