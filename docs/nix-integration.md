@@ -211,6 +211,9 @@ that `buildPackages` still provides a native GHC 9.8.4 side, which is the right
 place for the host worker. A real `targetHaskellPkgs` needs haskell.nix or
 another provider that can supply the cross GHC/package set.
 
+See `docs/plain-nixpkgs-cross-ghc.md` for the plain nixpkgs cross-GHC
+investigation.
+
 Enter a shell with both GHC versions and cabal:
 
 ```bash
