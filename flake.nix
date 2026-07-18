@@ -15,9 +15,12 @@
         nixpkgs.lib.genAttrs systems (system:
           f (import nixpkgs { inherit system; }));
 
-      mkHaskellSets = pkgs:
+      mkHaskellPkgs = pkgs:
         let
-          ghc984 = pkgs.haskell.packages.ghc984.override {
+          # Native host-side package set. The worker must run on the build host
+          # and currently targets GHC 9.8.4 because the first prototype is tied
+          # to that GHC API.
+          hostHaskellPkgs = pkgs.haskell.packages.ghc984.override {
             overrides = selfH: superH: {
               th-cross-plugin =
                 pkgs.callPackage ./nix/th-cross-plugin.nix {
@@ -34,7 +37,10 @@
             };
           };
 
-          ghc9103 = pkgs.haskell.packages.ghc9103.override {
+          # Consumer-side package set. This is still native x86_64-linux in the
+          # current flake, but it models the side that will eventually become a
+          # cross target package set.
+          consumerHaskellPkgs = pkgs.haskell.packages.ghc9103.override {
             overrides = selfH: superH: {
               th-cross-plugin =
                 pkgs.callPackage ./nix/th-cross-plugin.nix {
@@ -46,14 +52,14 @@
                   callPackage = selfH.callPackage;
                   haskellLib = pkgs.haskell.lib;
                   th-cross-plugin = selfH.th-cross-plugin;
-                  th-host-worker = ghc984.th-host-worker;
+                  th-host-worker = hostHaskellPkgs.th-host-worker;
                 };
             };
           };
         in
         {
-          inherit ghc984 ghc9103;
-          consumerGhc9103 = ghc9103.ghcWithPackages (hpkgs: [
+          inherit hostHaskellPkgs consumerHaskellPkgs;
+          consumerGhc = consumerHaskellPkgs.ghcWithPackages (hpkgs: [
             hpkgs.th-cross-plugin
           ]);
         };
@@ -61,16 +67,16 @@
     {
       packages = forAllSystems (pkgs:
         let
-          hs = mkHaskellSets pkgs;
+          hs = mkHaskellPkgs pkgs;
         in
         {
-          th-host-worker = hs.ghc984.th-host-worker;
-          th-cross-plugin-ghc984 = hs.ghc984.th-cross-plugin;
-          th-cross-plugin-ghc9103 = hs.ghc9103.th-cross-plugin;
-          consumer-ghc9103 = hs.consumerGhc9103;
-          th-consumer-example = hs.ghc9103.th-consumer-example;
+          th-host-worker = hs.hostHaskellPkgs.th-host-worker;
+          th-cross-plugin-ghc984 = hs.hostHaskellPkgs.th-cross-plugin;
+          th-cross-plugin-ghc9103 = hs.consumerHaskellPkgs.th-cross-plugin;
+          consumer-ghc9103 = hs.consumerGhc;
+          th-consumer-example = hs.consumerHaskellPkgs.th-consumer-example;
 
-          default = hs.ghc984.th-host-worker;
+          default = hs.hostHaskellPkgs.th-host-worker;
         });
 
       apps = forAllSystems (pkgs: {
@@ -101,7 +107,7 @@
 
       checks = forAllSystems (pkgs:
         let
-          hs = mkHaskellSets pkgs;
+          hs = mkHaskellPkgs pkgs;
           packages = self.packages.${pkgs.stdenv.hostPlatform.system};
         in
         {
@@ -116,7 +122,7 @@
               build_dir="$TMPDIR/consumer-build"
               mkdir -p "$build_dir"
 
-              ${hs.consumerGhc9103}/bin/ghc \
+              ${hs.consumerGhc}/bin/ghc \
                 -v0 \
                 -fno-code \
                 -fforce-recomp \
@@ -132,13 +138,13 @@
               touch "$out"
             '';
 
-          consumer-package = hs.ghc9103.th-consumer-example;
+          consumer-package = hs.consumerHaskellPkgs.th-consumer-example;
         });
 
       devShells = forAllSystems (pkgs: {
         default =
           let
-            hs = mkHaskellSets pkgs;
+            hs = mkHaskellPkgs pkgs;
             ghc984Wrapper = pkgs.writeShellScriptBin "ghc-9.8.4" ''
               exec ${pkgs.haskell.compiler.ghc984}/bin/ghc "$@"
             '';
@@ -148,11 +154,11 @@
             '';
 
             ghc9103Wrapper = pkgs.writeShellScriptBin "ghc-9.10.3" ''
-              exec ${hs.consumerGhc9103}/bin/ghc "$@"
+              exec ${hs.consumerGhc}/bin/ghc "$@"
             '';
 
             ghc9103PkgWrapper = pkgs.writeShellScriptBin "ghc-9.10.3-pkg" ''
-              exec ${hs.consumerGhc9103}/bin/ghc-pkg "$@"
+              exec ${hs.consumerGhc}/bin/ghc-pkg "$@"
             '';
 
             thCrossBuild = pkgs.writeShellScriptBin "th-cross-build" ''

@@ -19,7 +19,15 @@ cross package set:
 ```
 
 The first implementation step is intentionally smaller: prove the local Nix
-shape before adding Android or haskell.nix cross details.
+shape before adding Android or haskell.nix cross details. The current flake has
+two roles:
+
+- `hostHaskellPkgs`: native host-side Haskell package set, currently GHC 9.8.4;
+- `consumerHaskellPkgs`: the Haskell package set that consumes
+  `THCross.Plugin`, currently native GHC 9.10.3.
+
+`consumerHaskellPkgs` is deliberately named by role rather than by target. It is
+the place where a future cross target package set should be introduced.
 
 The current flake exposes only `x86_64-linux` outputs. Adding `aarch64-linux`
 to the flake `systems` list would mean "evaluate this flake on an ARM Linux
@@ -42,15 +50,18 @@ devShells.${system}.default
 apps.${system}.regen-cabal-nix
 ```
 
-The package split mirrors the cross-version prototype:
+The package split mirrors the intended cross architecture, but still runs on one
+host architecture:
 
-- `th-host-worker` is built with GHC 9.8.4;
-- `th-cross-plugin-ghc9103` is built with GHC 9.10.3;
-- `consumer-ghc9103` is a GHC 9.10.3 environment containing
+- `th-host-worker` comes from `hostHaskellPkgs` and is built with GHC 9.8.4;
+- `th-cross-plugin-ghc9103` comes from `consumerHaskellPkgs` and is built with
+  GHC 9.10.3;
+- `consumer-ghc9103` is a `consumerHaskellPkgs` GHC environment containing
   `th-cross-plugin`;
-- the check compiles `Example.hs` with `consumer-ghc9103` and passes the
-  Nix-built GHC 9.8.4 worker path to the plugin.
-- `th-consumer-example` is a minimal Cabal package built with GHC 9.10.3 and
+- `checks.${system}.cross-version-plugin` compiles `Example.hs` with
+  `consumer-ghc9103` and passes the Nix-built GHC 9.8.4 worker path to the
+  plugin.
+- `th-consumer-example` is a minimal Cabal package from `consumerHaskellPkgs`,
   configured with `THCross.Plugin` plus the Nix-built GHC 9.8.4 worker path.
   The Nix derivation injects those flags into the library component
   `ghc-options` so Cabal's configure-time compiler sanity check does not try to
@@ -237,7 +248,8 @@ cabal \
 
 ## Next Step
 
-After the local Nix proof works, the haskell.nix step should introduce:
+After the local Nix proof works, the next Nix integration step should replace or
+supplement `consumerHaskellPkgs` with a real target package set:
 
 - a native host package set for `th-host-worker`;
 - a target package set for the consumer package and `THCross.Plugin`;
@@ -249,3 +261,7 @@ After the local Nix proof works, the haskell.nix step should introduce:
 ```
 
 Android/aarch64 should be added only after the local Nix wiring is confirmed.
+
+The current flake intentionally does not add `aarch64-linux` to `systems`.
+`systems` controls which host systems evaluate the flake outputs; it is not the
+same thing as an Android or aarch64 target package set.
