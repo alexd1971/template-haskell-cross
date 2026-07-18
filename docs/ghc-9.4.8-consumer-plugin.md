@@ -5,8 +5,8 @@ compiler while keeping the host worker on GHC 9.8.4.
 
 ## Motivation
 
-Plain nixpkgs does not provide target-side cross GHC 9.8.4 for
-`pkgsCross.aarch64-multiplatform`, but it does evaluate target-side GHC 9.4.8.
+Plain nixpkgs does not provide cross GHC 9.8.4 for
+`pkgsCross.aarch64-multiplatform`, but it does evaluate cross GHC 9.4.8.
 
 The TH cross architecture does not require the consumer/cross compiler to match
 the worker GHC version:
@@ -48,10 +48,10 @@ ghc-9.4.8
 base-4.17.2.1
 ```
 
-## Current Cabal Bounds
+## Cabal Bounds
 
-Trying to build the current plugin package with GHC 9.4.8 fails before API
-checking:
+The initial attempt to build the plugin package with GHC 9.4.8 failed before
+API checking:
 
 ```bash
 cabal --store-dir .cabal-store-ghc948 \
@@ -69,16 +69,16 @@ conflict: th-cross-plugin => base>=4.19 && <4.22
 installed: base-4.17.2.1
 ```
 
-The current package is intentionally bounded for GHC 9.8 through GHC 9.10:
+The package bounds were then widened for the plugin library:
 
 ```text
-base >= 4.19 && < 4.22
-ghc >= 9.8 && < 9.11
-ghc-boot >= 9.8 && < 9.11
+base >= 4.17 && < 4.22
+ghc >= 9.4 && < 9.11
+ghc-boot >= 9.4 && < 9.11
 ```
 
-A GHC 9.4.8 consumer plugin path needs conditional Cabal bounds or a separate
-consumer plugin package.
+The host worker remains GHC 9.8.4-only. Only the consumer-side plugin library
+has been widened.
 
 ## runMetaHook API
 
@@ -186,6 +186,45 @@ So a GHC 9.4.8 compatibility path can likely replay worker diagnostics by
 introducing a small custom diagnostic type and wrapping it with
 `TcRnUnknownMessage`, instead of using the GHC 9.8+ TH-specific constructors.
 
+## Nix Build Result
+
+`flake.nix` exposes a native GHC 9.4.8 plugin build:
+
+```text
+packages.x86_64-linux.th-cross-plugin-ghc948
+```
+
+Run:
+
+```bash
+nix build .#th-cross-plugin-ghc948 -L
+```
+
+This currently succeeds. The first API issue encountered was:
+
+```text
+Could not find module `GHC.Driver.DynFlags`
+```
+
+The parser helper now imports `DynFlags`, `extensionFlags`, `getDynFlags`, and
+`targetPlatform` from `GHC.Driver.Session`, which works for both GHC 9.4.8 and
+the existing GHC 9.8+/9.10 paths.
+
+The GHC 9.4.8 compatibility path also uses:
+
+- CPP around `LangJs`, which does not exist in GHC 9.4.8's `ForeignSrcLang`;
+- CPP around diagnostics replay, because GHC 9.4.8 does not expose the GHC
+  9.8+ `THError`/`TcRnTHError` constructors used for proper warning/error
+  forwarding.
+
+For now, GHC 9.4.8 diagnostics replay is intentionally minimal:
+
+- worker errors become `fail`;
+- worker warnings are printed to stdout.
+
+This is enough for the first plugin build and simple splice-flow checks, but it
+is not yet equivalent to the GHC 9.8+ diagnostics replay.
+
 ## Preliminary Conclusion
 
 GHC 9.4.8 looks plausible as a consumer-side target for the textual protocol:
@@ -195,10 +234,10 @@ GHC 9.4.8 looks plausible as a consumer-side target for the textual protocol:
 - all basic `MetaRequest` constructors, including `MetaAW`, exist;
 - parser entrypoints needed by expression/type/pattern/declaration fragment
   parsing are present;
-- diagnostics replay needs compatibility code;
-- Cabal bounds must be relaxed conditionally;
+- the plugin library now builds with native GHC 9.4.8 through Nix;
+- diagnostics replay still needs proper compatibility code;
 - the host worker can remain GHC 9.8.4.
 
-The next implementation step should be a native GHC 9.4.8 compatibility build
-of `THCross.Plugin` before attempting target-side
+The next implementation step should be a native GHC 9.4.8 plugin smoke test
+with the GHC 9.8.4 host worker before attempting target-side
 `pkgsCross.aarch64-multiplatform.haskell.packages.ghc948`.

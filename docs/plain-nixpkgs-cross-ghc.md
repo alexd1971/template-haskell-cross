@@ -53,8 +53,9 @@ This is suitable for building or running a native host-side worker.
 
 ## Target-Side GHC Availability
 
-The critical question is whether the target-side Haskell package set can provide
-GHC 9.8.4:
+The critical question is whether the cross Haskell package set can provide GHC
+9.8.4. This compiler executable runs on the build platform and emits code for
+the target platform.
 
 ```bash
 nix eval --raw \
@@ -67,7 +68,8 @@ Observed result:
 error: GHC >= 9.6 can't be cross-compiled. If you meant to build a GHC cross-compiler, use `buildPackages`.
 ```
 
-The same error appears for GHC 9.6 and later in the checked plain nixpkgs set.
+The same error appears for cross GHC 9.6 and later in the checked plain nixpkgs
+set.
 
 Checked versions:
 
@@ -75,8 +77,8 @@ Checked versions:
 ghc810  removed from nixpkgs
 ghc90   removed from nixpkgs
 ghc92   removed from nixpkgs
-ghc94   evaluates to 9.4.8
-ghc948  evaluates to 9.4.8
+ghc94   cross GHC evaluates to 9.4.8
+ghc948  cross GHC evaluates to 9.4.8
 ghc96   rejected: GHC >= 9.6 can't be cross-compiled
 ghc98   rejected: GHC >= 9.6 can't be cross-compiled
 ghc984  rejected: GHC >= 9.6 can't be cross-compiled
@@ -132,8 +134,9 @@ Expected output:
 ```text
 buildPlatform=x86_64-unknown-linux-gnu
 targetHostPlatform=aarch64-unknown-linux-gnu
-hostWorkerGhc=9.8.4
-targetGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
+nativeHostGhc=9.8.4
+crossGhc948=9.4.8
+crossGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
 nextStep=use haskell.nix or another cross-GHC provider for a real targetHaskellPkgs
 ```
 
@@ -142,9 +145,9 @@ nextStep=use haskell.nix or another cross-GHC provider for a real targetHaskellP
 Plain nixpkgs is useful for documenting the host/target split and for providing
 native `buildPackages` tools, including GHC 9.8.4 for the host worker.
 
-Plain nixpkgs does not currently provide a target-side GHC 9.8.4 Haskell package
-set for `pkgsCross.aarch64-multiplatform`, but it does provide a target-side GHC
-9.4.8 candidate.
+Plain nixpkgs does not currently provide cross GHC 9.8.4 for
+`pkgsCross.aarch64-multiplatform`, but it does provide a cross GHC 9.4.8
+candidate.
 
 The next step should not be a full haskell.nix migration by default. Instead,
 investigate whether the consumer-side plugin can support GHC 9.4.8, while
@@ -152,4 +155,12 @@ keeping the existing GHC 9.8.4 host worker, protocol, and worker wiring
 unchanged.
 
 See `docs/ghc-9.4.8-consumer-plugin.md` for the first consumer-side GHC 9.4.8
-API check.
+API check. The plugin library now builds natively with GHC 9.4.8 through:
+
+```bash
+nix build .#th-cross-plugin-ghc948
+```
+
+The next step is a native GHC 9.4.8 plugin smoke test against the existing GHC
+9.8.4 host worker, before trying the target-side
+`pkgsCross.aarch64-multiplatform.haskell.packages.ghc948` path.

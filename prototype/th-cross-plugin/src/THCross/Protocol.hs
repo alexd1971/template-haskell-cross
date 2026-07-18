@@ -107,7 +107,9 @@ foreignSrcLangToStr = \case
   LangObjc -> "objc"
   LangObjcxx -> "objcxx"
   LangAsm -> "asm"
+#if MIN_VERSION_ghc(9,8,0)
   LangJs -> "js"
+#endif
   RawObject -> "raw-object"
 
 -- | Parse the protocol representation back to GHC's foreign source language.
@@ -118,7 +120,9 @@ parseForeignSrcLang = \case
   "objc" -> Right LangObjc
   "objcxx" -> Right LangObjcxx
   "asm" -> Right LangAsm
+#if MIN_VERSION_ghc(9,8,0)
   "js" -> Right LangJs
+#endif
   "raw-object" -> Right RawObject
   raw -> Left ("unknown foreign source language: " <> raw)
 

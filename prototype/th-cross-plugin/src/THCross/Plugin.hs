@@ -35,9 +35,21 @@ import GHC.Parser.Annotation (getLocA)
 import GHC.Serialized (Serialized)
 import GHC.Settings.Config (cProjectVersion)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
+#if MIN_VERSION_ghc(9,8,0)
 import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
+#endif
 import GHC.Tc.Types (TcGblEnv (..), TcM)
-import GHC.Tc.Utils.Monad (addDiagnostic, addErr, getGblEnv, liftIO, updTcRef)
+import GHC.Tc.Utils.Monad
+  (
+#if MIN_VERSION_ghc(9,8,0)
+    addDiagnostic
+  , addErr
+  ,
+#endif
+    getGblEnv
+  , liftIO
+  , updTcRef
+  )
 import GHC.Types.Meta (MetaHook, MetaRequest (..))
 import GHC.Types.SrcLoc
   ( SrcSpan (..)
@@ -414,6 +426,7 @@ replayDiagnostics :: [SpliceDiagnostic] -> TcM ()
 replayDiagnostics =
   mapM_ replayDiagnostic
   where
+#if MIN_VERSION_ghc(9,8,0)
     replayDiagnostic diagnostic =
       let message =
             TcRnTHError
@@ -424,6 +437,14 @@ replayDiagnostics =
        in if spliceDiagnosticIsError diagnostic
             then addErr message
             else addDiagnostic message
+#else
+    replayDiagnostic diagnostic
+      | spliceDiagnosticIsError diagnostic =
+          fail ("TH host worker reported error: " <> spliceDiagnosticMessage diagnostic)
+      | otherwise =
+          liftIO $
+            putStrLn ("th-cross: warning: " <> spliceDiagnosticMessage diagnostic)
+#endif
 
 -- | Run one JSON-lines request/response exchange with the worker executable.
 --

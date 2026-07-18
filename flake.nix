@@ -40,7 +40,7 @@
           # Consumer-side package set. This is still native x86_64-linux in the
           # current flake, but it models the side that will eventually become a
           # cross target package set.
-          consumerHaskellPkgs = pkgs.haskell.packages.ghc9103.override {
+          consumerGhc9103HaskellPkgs = pkgs.haskell.packages.ghc9103.override {
             overrides = selfH: superH: {
               th-cross-plugin =
                 pkgs.callPackage ./nix/th-cross-plugin.nix {
@@ -56,17 +56,27 @@
                 };
             };
           };
+
+          consumerGhc948HaskellPkgs = pkgs.haskell.packages.ghc948.override {
+            overrides = selfH: superH: {
+              th-cross-plugin =
+                pkgs.callPackage ./nix/th-cross-plugin.nix {
+                  callPackage = selfH.callPackage;
+                  haskellLib = pkgs.haskell.lib;
+                };
+            };
+          };
         in
         {
-          inherit hostHaskellPkgs consumerHaskellPkgs;
-          consumerGhc = consumerHaskellPkgs.ghcWithPackages (hpkgs: [
+          inherit hostHaskellPkgs consumerGhc9103HaskellPkgs consumerGhc948HaskellPkgs;
+          consumerGhc9103 = consumerGhc9103HaskellPkgs.ghcWithPackages (hpkgs: [
             hpkgs.th-cross-plugin
           ]);
         };
 
       mkAarch64LinuxCrossProbe = pkgs:
         let
-          targetPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+          crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
         in
         pkgs.runCommand
           "th-cross-aarch64-linux-cross-probe"
@@ -74,9 +84,10 @@
           ''
             cat > "$out" <<'EOF'
 buildPlatform=${pkgs.stdenv.hostPlatform.config}
-targetHostPlatform=${targetPkgs.stdenv.hostPlatform.config}
-hostWorkerGhc=${targetPkgs.buildPackages.haskell.compiler.ghc984.version}
-targetGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
+targetHostPlatform=${crossPkgs.stdenv.hostPlatform.config}
+nativeHostGhc=${pkgs.haskell.compiler.ghc984.version}
+crossGhc948=${crossPkgs.haskell.compiler.ghc948.version}
+crossGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
 nextStep=use haskell.nix or another cross-GHC provider for a real targetHaskellPkgs
 EOF
           '';
@@ -89,9 +100,10 @@ EOF
         {
           th-host-worker = hs.hostHaskellPkgs.th-host-worker;
           th-cross-plugin-ghc984 = hs.hostHaskellPkgs.th-cross-plugin;
-          th-cross-plugin-ghc9103 = hs.consumerHaskellPkgs.th-cross-plugin;
-          consumer-ghc9103 = hs.consumerGhc;
-          th-consumer-example = hs.consumerHaskellPkgs.th-consumer-example;
+          th-cross-plugin-ghc9103 = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
+          th-cross-plugin-ghc948 = hs.consumerGhc948HaskellPkgs.th-cross-plugin;
+          consumer-ghc9103 = hs.consumerGhc9103;
+          th-consumer-example = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
           aarch64-linux-cross-probe = mkAarch64LinuxCrossProbe pkgs;
 
           default = hs.hostHaskellPkgs.th-host-worker;
@@ -140,7 +152,7 @@ EOF
               build_dir="$TMPDIR/consumer-build"
               mkdir -p "$build_dir"
 
-              ${hs.consumerGhc}/bin/ghc \
+              ${hs.consumerGhc9103}/bin/ghc \
                 -v0 \
                 -fno-code \
                 -fforce-recomp \
@@ -156,7 +168,8 @@ EOF
               touch "$out"
             '';
 
-          consumer-package = hs.consumerHaskellPkgs.th-consumer-example;
+          consumer-package = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
+          consumer-plugin-ghc948 = hs.consumerGhc948HaskellPkgs.th-cross-plugin;
           cross-target-probe-aarch64-linux = mkAarch64LinuxCrossProbe pkgs;
         });
 
@@ -173,11 +186,11 @@ EOF
             '';
 
             ghc9103Wrapper = pkgs.writeShellScriptBin "ghc-9.10.3" ''
-              exec ${hs.consumerGhc}/bin/ghc "$@"
+              exec ${hs.consumerGhc9103}/bin/ghc "$@"
             '';
 
             ghc9103PkgWrapper = pkgs.writeShellScriptBin "ghc-9.10.3-pkg" ''
-              exec ${hs.consumerGhc}/bin/ghc-pkg "$@"
+              exec ${hs.consumerGhc9103}/bin/ghc-pkg "$@"
             '';
 
             thCrossBuild = pkgs.writeShellScriptBin "th-cross-build" ''

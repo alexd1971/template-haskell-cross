@@ -12,13 +12,15 @@ library
   hs-source-dirs:
       src
   default-language: Haskell2010
+  default-extensions:
+      CPP
   build-depends:
       aeson
-    , base >= 4.19 && < 4.22
+    , base >= 4.17 && < 4.22
     , binary
     , bytestring
-    , ghc >= 9.8 && < 9.11
-    , ghc-boot >= 9.8 && < 9.11
+    , ghc >= 9.4 && < 9.11
+    , ghc-boot >= 9.4 && < 9.11
     , ghci
     , process
   ghc-options:

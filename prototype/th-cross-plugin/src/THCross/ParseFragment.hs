@@ -13,13 +13,14 @@ module THCross.ParseFragment
 import GHC.Data.FastString (mkFastString)
 import GHC.Data.StringBuffer (stringToStringBuffer)
 import GHC.Driver.Config.Diagnostic (initDiagOpts)
-import GHC.Driver.DynFlags
+import GHC.Driver.Session
   ( DynFlags
   , extensionFlags
   , getDynFlags
+  , safeImportsOn
+  , supportedLanguagesAndExtensions
   , targetPlatform
   )
-import GHC.Driver.Session (safeImportsOn, supportedLanguagesAndExtensions)
 import GHC.Hs (GhcPs, HsModule (..), LHsDecl, LHsExpr, LHsType, LPat)
 import GHC.Parser (parseExpression, parseModule, parsePattern, parseType)
 import GHC.Parser.Lexer
