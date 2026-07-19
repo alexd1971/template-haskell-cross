@@ -161,6 +161,275 @@ API check. The plugin library now builds natively with GHC 9.4.8 through:
 nix build .#consumer-ghc948-plugin
 ```
 
-The next step is a native GHC 9.4.8 plugin smoke test against the existing GHC
-9.8.4 host worker, before trying the target-side
-`pkgsCross.aarch64-multiplatform.haskell.packages.ghc948` path.
+The native GHC 9.4.8 smoke test now passes with the existing GHC 9.8.4 host
+worker. The next cross-target question is more specific than "can the package
+build?": a GHC plugin must be loadable by the cross-GHC process running on the
+build host.
+
+That means the plugin should be native to the build host, but compiled against
+the same GHC API version as the cross compiler:
+
+```text
+x86_64-linux THCross.Plugin built with GHC 9.4.8
+  + aarch64-producing cross-GHC 9.4.8
+  + x86_64-linux th-host-worker built with GHC 9.8.4
+```
+
+The flake exposes this as an explicit smoke package:
+
+```bash
+nix build .#consumer-ghc948-cross-worker-smoke -L
+```
+
+There is also a no-Template-Haskell variant that keeps the plugin enabled:
+
+```bash
+nix build .#consumer-ghc948-cross-plugin-no-th-smoke -L
+```
+
+It is intentionally not included in the default `checks`, because it can pull in
+the full plain-nixpkgs aarch64 cross-GHC 9.4.8 closure.
+
+Current status: the correct compiler executable comes from
+`pkgsCross.aarch64-multiplatform.buildPackages.haskell.compiler.ghc948`, not
+from `pkgsCross.aarch64-multiplatform.haskell.compiler.ghc948`.
+
+That executable is `x86-64` and reports:
+
+```text
+("cross compiling","YES")
+```
+
+The remaining blocker is GHC 9.4's interpreter setup before the custom
+`runMetaHook` is reached. A control compile of `NoTH.hs` without `-fplugin`
+succeeds with `-fno-external-interpreter`, but compiling the same module with
+`THCross.Plugin` enabled fails with:
+
+```text
+Couldn't find a target code interpreter. Try with -fexternal-interpreter
+```
+
+but enabling the external interpreter conflicts with plugins:
+
+```text
+Plugins require -fno-external-interpreter
+```
+
+This means the problem is not specific to TH splice execution. In this plain
+nixpkgs GHC 9.4 cross setup, enabling a GHC plugin is already enough to require
+a target code interpreter.
+
+## GHC 9.4 Plugin Loading Blocker
+
+The failure happens before `THCross.Plugin` can install or use `runMetaHook`.
+The dynamic plugin failure is visible from the installed GHC 9.4.8 binary:
+
+```text
+--show-options does not list -fplugin-library
+strings .../bin/ghc contains fplugin/fplugin-opt/fplugin-trustworthy,
+  but not fplugin-library or ExternalPlugin
+```
+
+The related source paths observed in newer GHC sources available in the Nix
+store are:
+
+```text
+/nix/store/x74jagfaidi2gxwy01737im9mcvb31yh-ghc-a340115/compiler/GHC/Runtime/Loader.hs
+/nix/store/x74jagfaidi2gxwy01737im9mcvb31yh-ghc-a340115/compiler/GHC/Driver/Env.hs
+/nix/store/x74jagfaidi2gxwy01737im9mcvb31yh-ghc-a340115/compiler/GHC/Tc/Gen/Splice.hs
+```
+
+That source tree is GHC 9.8.4 (`configure.ac` reports `AC_INIT(... 9.8.4)`),
+so it must not be treated as exact source for the tested GHC 9.4.8 cross
+compiler. It is still useful for understanding the later dynamic/external
+plugin architecture.
+
+The important functions for the dynamic plugin failure are:
+
+```text
+GHC.Runtime.Loader.loadPlugins
+GHC.Runtime.Loader.checkExternalInterpreter
+GHC.Runtime.Loader.getValueSafely
+GHC.Driver.Env.hscInterp
+GHC.Tc.Gen.Splice.runMeta
+GHC.Tc.Gen.Splice.tcGetInterp
+```
+
+In the later source, the dynamic plugin path in
+`GHC.Runtime.Loader.loadPlugins` checks interpreter configuration before loading
+plugin modules. Non-empty dynamic plugins call `checkExternalInterpreter`.
+
+`checkExternalInterpreter` rejects `-fexternal-interpreter` for plugins:
+
+```text
+Plugins require -fno-external-interpreter
+```
+
+With `-fno-external-interpreter`, `GHC.Runtime.Loader.getValueSafely` still uses
+`hscInterp hsc_env` to load the plugin value. For this cross-GHC, `hsc_interp`
+is absent, so `GHC.Driver.Env.hscInterp` fails with:
+
+```text
+Couldn't find a target code interpreter. Try with -fexternal-interpreter
+```
+
+The Template Haskell path has its own interpreter check in
+`GHC.Tc.Gen.Splice.tcGetInterp`, but the current failure is earlier than that.
+This is why the no-TH smoke test with `-fplugin=THCross.Plugin` fails the same
+way as the splice smoke test.
+
+## Possible Workarounds
+
+### External Static Plugin Library
+
+Some GHC source trees have a command-line mechanism intended for this exact
+class of cross-compiler problem:
+
+```bash
+-fplugin-library=path/to/plugin;package-unit-id;THCross.Plugin;["worker=/path/to/th-host-worker"]
+```
+
+The source is:
+
+```text
+GHC.Driver.Plugins.External
+GHC.Driver.Session.addExternalPlugin
+GHC.Driver.Session flag: fplugin-library
+GHC.Runtime.Loader.initializePlugins
+GHC.Driver.Plugins.loadExternalPlugins
+```
+
+`GHC.Driver.Plugins.External` describes two static plugin forms:
+
+```text
+internal: installed through the GHC API
+external: loaded from a shared library through -fplugin-library
+```
+
+The same module explicitly says the intended use case for external static
+plugins is cross compilers, because a GHC cross-compiler cannot build or load
+host plugins through the non-static `-fplugin` path.
+
+This would be the preferred practical route before patching GHC, but not with
+the tested GHC 9.4.8 binary:
+
+```text
+obtain a cross-GHC version that exposes -fplugin-library
+  -> build THCross.Plugin as a build-host shared library for the same GHC API
+  -> pass that library to cross-GHC with -fplugin-library
+  -> keep the same GHC 9.8.4 th-host-worker
+  -> check whether NoTH.hs reaches successful compilation
+  -> then check whether Example.hs reaches runMetaHook and the worker
+```
+
+Important constraints from the GHC source comment:
+
+```text
+the plugin library must target the same compiler ABI;
+the unit id must be known and passed in the -fplugin-library spec;
+the symbol looked up is THCrossziPlugin_plugin_closure, optionally prefixed by the encoded unit id;
+the plugin value type is not checked, so a wrong library/symbol can crash the compiler.
+```
+
+This path still loads a host `.so`, but it should bypass the dynamic
+module/interface loading path used by `-fplugin=THCross.Plugin`. That is exactly
+the path that is currently blocked by `hscInterp`.
+
+However, the currently tested plain-nixpkgs cross-GHC 9.4.8 binary does not
+appear to expose this flag:
+
+```bash
+/nix/store/...-aarch64-unknown-linux-gnu-ghc-9.4.8/bin/aarch64-unknown-linux-gnu-ghc \
+  --show-options | grep plugin
+```
+
+Observed plugin-related options:
+
+```text
+-plugin-package-id
+-plugin-package
+-hide-all-plugin-packages
+-fplugin-opt
+-fplugin-trustworthy
+-fplugin
+-fclear-plugins
+```
+
+Manual use of `-fplugin-library=...` was parsed as `-fplugin` with a module name
+starting with `-library=...`, not as an external static plugin flag:
+
+```text
+Could not find module '-library=/nix/store/...'
+```
+
+So this remains a potential route for a GHC that exposes `-fplugin-library`, but
+it is not currently available in the tested plain-nixpkgs GHC 9.4.8 cross
+compiler.
+
+The next investigation should therefore be:
+
+```text
+find/build a cross-GHC version that supports -fplugin-library;
+verify the flag in the actual binary with --show-options;
+compile THCross.Plugin with a native GHC of the same version;
+run the existing NoTH.hs and Example.hs smokes with -fplugin-library.
+```
+
+If this works, it is preferable to patching GHC. It preserves the plugin as an
+ordinary separately built artifact and uses GHC's intended external static
+plugin mechanism for cross compilers.
+
+### Internal Static Plugin Or Patched GHC Main
+
+If a suitable `-fplugin-library` cross-GHC cannot be obtained, the next fallback
+is to avoid runtime plugin loading entirely. Link `THCross.Plugin.plugin` into
+the compiler/driver side and install it as an internal static plugin, or patch
+the GHC frontend to install the same `runMetaHook` directly.
+
+Expected shape:
+
+```text
+cross GHC executable already contains THCross plugin logic
+  -> no GHC.Runtime.Loader dynamic plugin load
+  -> no plugin-loading call to hscInterp
+  -> runMetaHook can call the native host worker
+```
+
+This is a narrower proof-of-concept path than redesigning GHC's dynamic plugin
+loader. It tests the real mechanism we care about: whether cross-side TH splice
+evaluation can be intercepted and replaced before the target interpreter is
+needed for TH itself.
+
+The source-level questions for this path are:
+
+```text
+where staticPlugins are stored in HscEnv / DynFlags;
+where GHC's normal frontend initializes static plugins;
+whether a small custom GHC main can inject THCross.Plugin.plugin;
+whether a minimal GHC source patch is simpler than a custom driver.
+```
+
+### Loader Patch
+
+Patching only `checkExternalInterpreter` is not enough. Even if that guard is
+removed, `getValueSafely` still needs a way to load the plugin value without
+`hscInterp`. A loader patch would have to distinguish host-loadable compiler
+plugins from target-interpreted code and provide a build-host loading path for
+the plugin module.
+
+That is a larger and more invasive GHC change. It may be the right long-term
+UX if we need to keep the normal command line:
+
+```bash
+-fplugin=THCross.Plugin
+```
+
+but it is not the smallest next proof-of-concept step.
+
+### Stub Interpreter
+
+A target interpreter stub is unlikely to solve the dynamic plugin problem by
+itself. The plugin loader explicitly rejects `ExternalInterp`, while the
+non-external path still requires `hscInterp` to obtain the plugin value. A stub
+may become relevant later for other GHC checks, but it does not address the
+observed `-fplugin` loading conflict directly.

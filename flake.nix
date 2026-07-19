@@ -57,6 +57,10 @@
             };
           };
 
+          # Native build-host package set for a GHC 9.4.8 consumer/cross
+          # compiler. A GHC plugin is loaded into the compiler process, so it
+          # must be built for the build host architecture, but against the same
+          # GHC API version as the compiler that loads it.
           consumerGhc948HaskellPkgs = pkgs.haskell.packages.ghc948.override {
             overrides = selfH: superH: {
               th-cross-plugin =
@@ -90,8 +94,11 @@ buildPlatform=${pkgs.stdenv.hostPlatform.config}
 targetHostPlatform=${crossPkgs.stdenv.hostPlatform.config}
 nativeHostGhc=${pkgs.haskell.compiler.ghc984.version}
 crossGhc948=${crossPkgs.haskell.compiler.ghc948.version}
+targetSideGhc948Compiler=${crossPkgs.haskell.compiler.ghc948.name}
+buildHostCrossGhc948Compiler=${crossPkgs.buildPackages.haskell.compiler.ghc948.name}
+consumerPluginShape=native build-host plugin built by consumer-ghc948-plugin
 crossGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
-nextStep=use haskell.nix or another cross-GHC provider for a real targetHaskellPkgs
+nextStep=run consumer-ghc948-cross-worker-smoke to test cross-GHC plus native same-version plugin plus GHC 9.8.4 worker
 EOF
           '';
     in
@@ -108,6 +115,113 @@ EOF
           consumer-ghc9103-ghc = hs.consumerGhc9103;
           consumer-ghc948-ghc = hs.consumerGhc948;
           consumer-ghc9103-package = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
+          consumer-ghc948-cross-worker-smoke =
+            let
+              crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+              crossTargetTriple = crossPkgs.stdenv.hostPlatform.config;
+              crossGhc = "${crossPkgs.buildPackages.haskell.compiler.ghc948}/bin/${crossTargetTriple}-ghc";
+              pluginPackageDb = "${hs.consumerGhc948}/lib/ghc-9.4.8/package.conf.d";
+              worker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
+            in
+            pkgs.runCommand
+              "th-cross-consumer-ghc948-cross-worker-smoke"
+              {
+                nativeBuildInputs = [
+                  hs.consumerGhc948
+                ];
+              }
+              ''
+                build_dir="$TMPDIR/consumer-ghc948-cross-build"
+                mkdir -p "$build_dir"
+
+                echo "cross target triple: ${crossTargetTriple}"
+                echo "cross GHC: ${crossGhc}"
+                echo "plugin package DB: ${pluginPackageDb}"
+                echo "worker: ${worker}"
+
+                plugin_library_path=$(
+                  find \
+                    "${hs.consumerGhc948}/lib/ghc-9.4.8" \
+                    -name '*.so*' \
+                    -printf '%h\n' \
+                    | sort -u \
+                    | paste -sd:
+                )
+                export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+                # GHC 9.4 currently fails here before runMetaHook: plugins
+                # require -fno-external-interpreter, while cross TH asks for a
+                # target code interpreter.
+                "${crossGhc}" \
+                  -v0 \
+                  -fno-code \
+                  -fno-external-interpreter \
+                  -fforce-recomp \
+                  -package-db ${pluginPackageDb} \
+                  -plugin-package th-cross-plugin \
+                  -i${./prototype/th-cross-plugin/test/fixtures} \
+                  -outputdir "$build_dir" \
+                  -hidir "$build_dir" \
+                  -odir "$build_dir" \
+                  -stubdir "$build_dir" \
+                  -fplugin=THCross.Plugin \
+                  -fplugin-opt=THCross.Plugin:worker=${worker} \
+                  ${./prototype/th-cross-plugin/test/fixtures/Example.hs}
+
+                touch "$out"
+              '';
+          consumer-ghc948-cross-plugin-no-th-smoke =
+            let
+              crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+              crossTargetTriple = crossPkgs.stdenv.hostPlatform.config;
+              crossGhc = "${crossPkgs.buildPackages.haskell.compiler.ghc948}/bin/${crossTargetTriple}-ghc";
+              pluginPackageDb = "${hs.consumerGhc948}/lib/ghc-9.4.8/package.conf.d";
+              worker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
+            in
+            pkgs.runCommand
+              "th-cross-consumer-ghc948-cross-plugin-no-th-smoke"
+              {
+                nativeBuildInputs = [
+                  hs.consumerGhc948
+                ];
+              }
+              ''
+                build_dir="$TMPDIR/consumer-ghc948-cross-no-th-build"
+                mkdir -p "$build_dir"
+
+                echo "cross target triple: ${crossTargetTriple}"
+                echo "cross GHC: ${crossGhc}"
+                echo "plugin package DB: ${pluginPackageDb}"
+                echo "worker: ${worker}"
+
+                plugin_library_path=$(
+                  find \
+                    "${hs.consumerGhc948}/lib/ghc-9.4.8" \
+                    -name '*.so*' \
+                    -printf '%h\n' \
+                    | sort -u \
+                    | paste -sd:
+                )
+                export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+                "${crossGhc}" \
+                  -v0 \
+                  -fno-code \
+                  -fno-external-interpreter \
+                  -fforce-recomp \
+                  -package-db ${pluginPackageDb} \
+                  -plugin-package th-cross-plugin \
+                  -i${./prototype/th-cross-plugin/test/fixtures} \
+                  -outputdir "$build_dir" \
+                  -hidir "$build_dir" \
+                  -odir "$build_dir" \
+                  -stubdir "$build_dir" \
+                  -fplugin=THCross.Plugin \
+                  -fplugin-opt=THCross.Plugin:worker=${worker} \
+                  ${./prototype/th-cross-plugin/test/fixtures/NoTH.hs}
+
+                touch "$out"
+              '';
           aarch64-linux-cross-probe = mkAarch64LinuxCrossProbe pkgs;
 
           default = hs.hostHaskellPkgs.th-host-worker;

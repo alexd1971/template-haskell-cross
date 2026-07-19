@@ -46,6 +46,8 @@ packages.${system}.host-ghc984-worker
 packages.${system}.host-ghc984-plugin
 packages.${system}.consumer-ghc948-plugin
 packages.${system}.consumer-ghc948-ghc
+packages.${system}.consumer-ghc948-cross-plugin-no-th-smoke
+packages.${system}.consumer-ghc948-cross-worker-smoke
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
 packages.${system}.consumer-ghc9103-package
@@ -69,6 +71,11 @@ host architecture:
   consumer-side plugin;
 - `consumer-ghc948-ghc` is a GHC 9.4.8 environment containing
   `th-cross-plugin`;
+- `consumer-ghc948-cross-plugin-no-th-smoke` is an explicit aarch64 cross-GHC
+  plugin-loading smoke test without Template Haskell splices;
+- `consumer-ghc948-cross-worker-smoke` is an explicit aarch64 cross-GHC smoke
+  test with a Template Haskell splice. These cross smoke packages are not part
+  of `flake check`, because they may build the large cross-GHC closure;
 - `consumer-ghc9103-plugin` comes from `consumerGhc9103HaskellPkgs` and is
   built with GHC 9.10.3;
 - `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
@@ -151,6 +158,54 @@ Run the GHC 9.4.8 consumer plugin smoke test against the GHC 9.8.4 worker:
 ```bash
 nix build .#checks.x86_64-linux.consumer-ghc948-worker-smoke -L
 ```
+
+Run the explicit aarch64 cross-GHC 9.4.8 smoke test against the native GHC
+9.4.8 plugin and GHC 9.8.4 worker:
+
+```bash
+nix build .#consumer-ghc948-cross-worker-smoke -L
+```
+
+Run the same cross-GHC/plugin wiring without Template Haskell splices:
+
+```bash
+nix build .#consumer-ghc948-cross-plugin-no-th-smoke -L
+```
+
+These are intentionally packages, not default flake checks. Building them may
+pull in the full plain-nixpkgs aarch64 cross-GHC 9.4.8 closure.
+
+Current result: the correct build-host executable cross-GHC is
+`pkgsCross.aarch64-multiplatform.buildPackages.haskell.compiler.ghc948`.
+Its wrapper reports:
+
+```text
+("cross compiling","YES")
+```
+
+and the internal compiler binary is `x86-64`. This is the correct shape for
+loading a native GHC plugin.
+
+The current blocker is GHC 9.4's cross-GHC plugin loading path. A control
+compile of `NoTH.hs` without `-fplugin` succeeds with `-fno-external-interpreter`.
+The same `NoTH.hs` compile with `THCross.Plugin` enabled fails before any
+Template Haskell splice is involved:
+
+```text
+Couldn't find a target code interpreter. Try with -fexternal-interpreter
+```
+
+Using `-fexternal-interpreter` is not accepted with plugins:
+
+```text
+Plugins require -fno-external-interpreter
+```
+
+So the blocker is earlier than `runMetaHook`: this GHC 9.4 cross setup requires
+a target code interpreter just to load/use a GHC plugin.
+
+The source-level analysis and possible workaround paths are recorded in
+`docs/plain-nixpkgs-cross-ghc.md`.
 
 Build the consumer GHC environment:
 
@@ -238,17 +293,31 @@ buildPlatform=x86_64-unknown-linux-gnu
 targetHostPlatform=aarch64-unknown-linux-gnu
 nativeHostGhc=9.8.4
 crossGhc948=9.4.8
+targetSideGhc948Compiler=ghc-aarch64-unknown-linux-gnu-9.4.8
+buildHostCrossGhc948Compiler=aarch64-unknown-linux-gnu-ghc-9.4.8
+consumerPluginShape=native build-host plugin built by consumer-ghc948-plugin
 crossGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
-nextStep=use haskell.nix or another cross-GHC provider for a real targetHaskellPkgs
+nextStep=run consumer-ghc948-cross-worker-smoke to test cross-GHC plus native same-version plugin plus GHC 9.8.4 worker
 ```
 
 This check is intentionally not a Haskell cross build. It records the current
 plain nixpkgs limitation: evaluating cross GHC 9.8.4 in
 `pkgsCross.aarch64-multiplatform` fails with nixpkgs' own
-`GHC >= 9.6 can't be cross-compiled` error. The useful part for the prototype is
-that `buildPackages` still provides a native GHC 9.8.4 side, which is the right
-place for the host worker. A real `targetHaskellPkgs` needs haskell.nix or
-another provider that can supply the cross GHC/package set.
+`GHC >= 9.6 can't be cross-compiled` error. The useful parts for the prototype
+are:
+
+- `buildPackages` still provides a native GHC 9.8.4 side, which is the right
+  place for the host worker;
+- plain nixpkgs exposes an aarch64-producing GHC 9.4.8 package set;
+- the plugin should come from the native GHC 9.4.8 package set, because
+  `-fplugin` loads code into the cross-GHC process running on the build host.
+- the executable compiler for this smoke test comes from
+  `pkgsCross.aarch64-multiplatform.buildPackages.haskell.compiler.ghc948`, not
+  from `pkgsCross.aarch64-multiplatform.haskell.compiler.ghc948`.
+
+The explicit `consumer-ghc948-cross-worker-smoke` package tests that wiring by
+running the aarch64 cross-GHC with the native GHC 9.4.8 plugin package DB and
+the native GHC 9.8.4 worker.
 
 See `docs/plain-nixpkgs-cross-ghc.md` for the plain nixpkgs cross-GHC
 investigation.
