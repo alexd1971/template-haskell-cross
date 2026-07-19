@@ -379,6 +379,53 @@ If this works, it is preferable to patching GHC. It preserves the plugin as an
 ordinary separately built artifact and uses GHC's intended external static
 plugin mechanism for cross compilers.
 
+Plain nixpkgs does provide a build-host aarch64-producing GHC 9.10.3 executable:
+
+```bash
+nix build --no-link --print-out-paths \
+  nixpkgs#legacyPackages.x86_64-linux.pkgsCross.aarch64-multiplatform.buildPackages.haskell.compiler.ghc9103
+```
+
+The resulting binary reports:
+
+```text
+("Project version","9.10.3")
+("Host platform","x86_64-unknown-linux")
+("Target platform","aarch64-unknown-linux")
+("cross compiling","YES")
+```
+
+and exposes:
+
+```text
+-fplugin-library
+```
+
+However, the first `NoTH.hs` `-fplugin-library` smoke still fails:
+
+```text
+loadExternalPlugins: can't load external plugins with GHC built without internal interpreter
+```
+
+This is a different blocker than GHC 9.4.8:
+
+```text
+GHC 9.4.8:  -fplugin-library is absent from the tested binary.
+GHC 9.10.3: -fplugin-library is present, but loadExternalPlugins was compiled
+            without HAVE_INTERNAL_INTERPRETER.
+```
+
+The flake records this as:
+
+```bash
+nix build .#consumer-ghc9103-cross-plugin-library-probe -L
+cat result
+```
+
+The next preferred path is therefore more specific: obtain or build a cross-GHC
+version that both exposes `-fplugin-library` and includes the internal
+interpreter support required by `loadExternalPlugins`.
+
 ### Internal Static Plugin Or Patched GHC Main
 
 If a suitable `-fplugin-library` cross-GHC cannot be obtained, the next fallback

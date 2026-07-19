@@ -48,6 +48,7 @@ packages.${system}.consumer-ghc948-plugin
 packages.${system}.consumer-ghc948-ghc
 packages.${system}.consumer-ghc948-cross-plugin-no-th-smoke
 packages.${system}.consumer-ghc948-cross-worker-smoke
+packages.${system}.consumer-ghc9103-cross-plugin-library-probe
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
 packages.${system}.consumer-ghc9103-package
@@ -76,6 +77,10 @@ host architecture:
 - `consumer-ghc948-cross-worker-smoke` is an explicit aarch64 cross-GHC smoke
   test with a Template Haskell splice. These cross smoke packages are not part
   of `flake check`, because they may build the large cross-GHC closure;
+- `consumer-ghc9103-cross-plugin-library-probe` checks whether the plain
+  nixpkgs aarch64 cross-GHC 9.10.3 can load `THCross.Plugin` through
+  `-fplugin-library`. It writes a report instead of failing the derivation,
+  because the current result is an expected blocker;
 - `consumer-ghc9103-plugin` comes from `consumerGhc9103HaskellPkgs` and is
   built with GHC 9.10.3;
 - `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
@@ -206,6 +211,23 @@ a target code interpreter just to load/use a GHC plugin.
 
 The source-level analysis and possible workaround paths are recorded in
 `docs/plain-nixpkgs-cross-ghc.md`.
+
+Run the explicit aarch64 cross-GHC 9.10.3 `-fplugin-library` probe:
+
+```bash
+nix build .#consumer-ghc9103-cross-plugin-library-probe -L
+cat result
+```
+
+Current result: plain nixpkgs provides an aarch64-producing GHC 9.10.3
+build-host executable, and that executable exposes `-fplugin-library`. The
+probe still cannot load the external static plugin because this GHC package was
+built without the internal interpreter code path needed by
+`GHC.Driver.Plugins.loadExternalPlugins`:
+
+```text
+loadExternalPlugins: can't load external plugins with GHC built without internal interpreter
+```
 
 Build the consumer GHC environment:
 

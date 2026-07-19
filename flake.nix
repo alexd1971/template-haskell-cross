@@ -101,6 +101,80 @@ crossGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cr
 nextStep=run consumer-ghc948-cross-worker-smoke to test cross-GHC plus native same-version plugin plus GHC 9.8.4 worker
 EOF
           '';
+
+      mkConsumerGhc9103CrossPluginLibraryProbe = pkgs: hs:
+        let
+          crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+          crossTargetTriple = crossPkgs.stdenv.hostPlatform.config;
+          crossGhc = "${crossPkgs.buildPackages.haskell.compiler.ghc9103}/bin/${crossTargetTriple}-ghc";
+          plugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
+          worker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
+        in
+        pkgs.runCommand
+          "th-cross-consumer-ghc9103-cross-plugin-library-probe"
+          { }
+          ''
+            build_dir="$TMPDIR/consumer-ghc9103-cross-plugin-library-build"
+            mkdir -p "$build_dir"
+
+            plugin_conf=$(find "${plugin}/lib/ghc-9.10.3" -path '*/package.conf.d/th-cross-plugin-*.conf' | head -n 1)
+            plugin_so=$(find "${plugin}/lib/ghc-9.10.3" -name 'libHSth-cross-plugin-*.so' | head -n 1)
+            plugin_unit=$(sed -n 's/^id:[[:space:]]*//p' "$plugin_conf")
+            plugin_library_path=$(
+              find \
+                "${plugin}/lib/ghc-9.10.3" \
+                -name '*.so*' \
+                -printf '%h\n' \
+                | sort -u \
+                | paste -sd:
+            )
+
+            export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+            {
+              echo "crossTargetTriple=${crossTargetTriple}"
+              echo "crossGhc=${crossGhc}"
+              echo "worker=${worker}"
+              echo "pluginConf=$plugin_conf"
+              echo "pluginSo=$plugin_so"
+              echo "pluginUnit=$plugin_unit"
+              echo
+              echo "plugin-related options:"
+              "${crossGhc}" --show-options | grep 'plugin' || true
+              echo
+              echo "cross info:"
+              "${crossGhc}" --info | grep -E 'cross compiling|Project version|Host platform|Target platform|Have interpreter|GHC Dynamic|LibDir' || true
+              echo
+              echo "compile NoTH.hs with -fplugin-library:"
+            } > "$out"
+
+            set +e
+            "${crossGhc}" \
+              -v0 \
+              -fno-code \
+              -fno-external-interpreter \
+              -fforce-recomp \
+              -i${./prototype/th-cross-plugin/test/fixtures} \
+              -outputdir "$build_dir" \
+              -hidir "$build_dir" \
+              -odir "$build_dir" \
+              -stubdir "$build_dir" \
+              "-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;[\"worker=${worker}\"]" \
+              ${./prototype/th-cross-plugin/test/fixtures/NoTH.hs} \
+              >> "$out" 2>&1
+            compile_exit="$?"
+            set -e
+
+            {
+              echo
+              echo "compileExit=$compile_exit"
+              if [ "$compile_exit" -eq 0 ]; then
+                echo "status=ok"
+              else
+                echo "status=blocked"
+              fi
+            } >> "$out"
+          '';
     in
     {
       packages = forAllSystems (pkgs:
@@ -115,6 +189,8 @@ EOF
           consumer-ghc9103-ghc = hs.consumerGhc9103;
           consumer-ghc948-ghc = hs.consumerGhc948;
           consumer-ghc9103-package = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
+          consumer-ghc9103-cross-plugin-library-probe =
+            mkConsumerGhc9103CrossPluginLibraryProbe pkgs hs;
           consumer-ghc948-cross-worker-smoke =
             let
               crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
