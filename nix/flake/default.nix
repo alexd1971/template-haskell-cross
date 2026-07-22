@@ -28,8 +28,11 @@ in
       aarch64LinuxCrossProbe = import ./experiments/aarch64-linux-cross-probe.nix {
         inherit pkgs;
       };
+      crossGhc9103Aarch64 = import ./cross-ghc/ghc9103-aarch64.nix {
+        inherit pkgs;
+      };
       consumerGhc9103Cross = import ./experiments/consumer-ghc9103-cross.nix {
-        inherit pkgs hs thCrossLib;
+        inherit pkgs hs thCrossLib crossGhc9103Aarch64;
       };
       consumerGhc948Cross = import ./experiments/consumer-ghc948-cross.nix {
         inherit pkgs hs testFixturesDir;

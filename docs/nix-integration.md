@@ -53,6 +53,7 @@ packages.${system}.consumer-ghc9103-cross-ghc-forced-internal-interpreter
 packages.${system}.consumer-ghc9103-cross-plugin-library-bootstrapped-probe
 packages.${system}.consumer-ghc9103-cross-plugin-library-forced-internal-interpreter-probe
 packages.${system}.consumer-ghc9103-cross-worker-smoke
+packages.${system}.consumer-ghc9103-cross-cabal-package-smoke
 packages.${system}.consumer-ghc9103-cross-plugin-library-probe
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
@@ -101,6 +102,10 @@ host architecture:
   runs the `-fplugin-library` check against that forced build;
 - `consumer-ghc9103-cross-worker-smoke` uses that forced cross-GHC to compile a
   real expression splice through `THCross.Plugin` and the GHC 9.8.4 host worker;
+- `consumer-ghc9103-cross-cabal-package-smoke` copies the checked-in
+  `th-consumer-example` package, runs Cabal's `Setup configure` and
+  `Setup build` with the forced aarch64 cross-GHC, and verifies that the package
+  component build reaches the plugin and host worker;
 - `consumer-ghc9103-plugin` comes from `consumerGhc9103HaskellPkgs` and is
   built with GHC 9.10.3;
 - `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
@@ -126,9 +131,23 @@ TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.8.4/lib/ghc-9.8.4/lib
 
 This prevents the worker from discovering the consumer GHC 9.10.3 via `PATH`
 while evaluating host-side TH.
-The libdir is passed explicitly from `flake.nix`; it is not inferred from a
-generic `ghc` argument in the worker wrapper, because that can accidentally
-resolve to the consumer compiler package set.
+The libdir is passed explicitly from `nix/flake/haskell-pkgs.nix`; it is not
+inferred from a generic `ghc` argument in the worker wrapper, because that can
+accidentally resolve to the consumer compiler package set.
+
+The top-level `flake.nix` is intentionally only a thin entrypoint. The Nix
+flake implementation lives under `nix/flake/`:
+
+```text
+nix/flake/default.nix
+nix/flake/haskell-pkgs.nix
+nix/flake/lib.nix
+nix/flake/cross-ghc/ghc9103-aarch64.nix
+nix/flake/experiments/*.nix
+```
+
+Cross-GHC construction is kept under `nix/flake/cross-ghc/`; experiment modules
+consume those compiler derivations instead of defining toolchains inline.
 
 The Haskell package derivations are checked in under `nix/generated/` instead
 of using `callCabal2nix` during flake evaluation. This avoids requiring
@@ -518,6 +537,13 @@ Build the package-level consumer example:
 nix build .#consumer-ghc9103-package
 ```
 
+Run the aarch64 cross-GHC Cabal package smoke:
+
+```bash
+nix build .#consumer-ghc9103-cross-cabal-package-smoke
+cat result
+```
+
 Inspect the plain nixpkgs aarch64-linux cross probe:
 
 ```bash
@@ -562,9 +588,15 @@ GHC 9.10.3 plugin package
   -> textual expression expansion
 ```
 
-The package-level check additionally confirms that plugin options can be wired
-through a Cabal package derivation rather than only through a direct `ghc`
+The native package-level check additionally confirms that plugin options can be
+wired through a Cabal package derivation rather than only through a direct `ghc`
 invocation.
+
+The cross Cabal package smoke is the first package-shaped aarch64 build path in
+this flake. It copies `prototype/th-consumer-example`, creates a standard
+`Setup.hs`, runs `Setup configure` with the patched aarch64 cross-GHC and then
+runs `Setup build`. The package is not installed yet; the derivation writes a
+diagnostic report to `$out`.
 
 Observed package-level output:
 
@@ -584,6 +616,37 @@ th-consumer-example> th-host-worker: cache miss src/Example.hs
 `th-consumer-example` disables library profiling in its Nix derivation so the
 check does not compile a separate profiling object variant and does not execute
 the same splice a second time only for `*.p_o` output.
+
+Observed cross Cabal package output:
+
+```text
+cabal package: th-consumer-example
+configure/build with Setup.hs and cross-GHC:
+Configuring th-consumer-example-0.1.0.0...
+Preprocessing library for th-consumer-example-0.1.0.0...
+Building library for th-consumer-example-0.1.0.0...
+th-cross: intercepted Template Haskell splice
+module: Example
+kind: expression
+location: src/Example.hs:6:8-17
+expression: ([| 42 |])
+worker: /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
+th-cross: started worker /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
+th-host-worker: cache miss src/Example.hs
+
+configureExit=0
+buildExit=0
+status=ok
+```
+
+This confirms:
+
+- Cabal reads the `th-consumer-example.cabal` package description;
+- Cabal configures the library component with the patched aarch64 cross-GHC;
+- the cross-GHC loads `THCross.Plugin` through `-fplugin-library`;
+- the plugin delegates TH execution to the native GHC 9.8.4 worker;
+- Cabal receives target object output, unlike the earlier failed `-fno-code`
+  attempt where `ar` could not find `Example.o`.
 
 Observed cross-probe output:
 
@@ -688,21 +751,30 @@ cabal \
 
 ## Next Step
 
-After the local Nix proof works, the next Nix integration step should replace or
-supplement the consumer package set with a real target package set:
+The current local proof includes a successful Setup-based Cabal package build
+for `th-consumer-example` with the patched aarch64 GHC 9.10.3 cross compiler.
+The next Nix integration step should move from this diagnostic `Setup.hs`
+smoke toward normal package-set integration:
 
 - a native host package set for `th-host-worker`;
 - a target package set for the consumer package;
 - a compiler-plugin package database built for the compiler process, not for
   target runtime code;
-- plugin configuration that passes:
+- plugin configuration that passes either `-fplugin-library` for a suitable
+  cross-GHC or the equivalent plugin package database flags where supported:
 
 ```text
 -fplugin=THCross.Plugin
 -fplugin-opt=THCross.Plugin:worker=/nix/store/.../bin/th-host-worker
 ```
 
-Android/aarch64 should be added only after the local Nix wiring is confirmed.
+Concrete next candidates are:
+
+- convert `consumer-ghc9103-cross-cabal-package-smoke` from a diagnostic report
+  derivation into a package derivation that installs build outputs;
+- try integrating the same flags into nixpkgs' Haskell generic builder for the
+  consumer package;
+- only then add Android/aarch64 package-set details.
 
 The current flake intentionally does not add `aarch64-linux` to `systems`.
 `systems` controls which host systems evaluate the flake outputs; it is not the

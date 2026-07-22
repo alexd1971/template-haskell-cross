@@ -136,8 +136,11 @@ buildPlatform=x86_64-unknown-linux-gnu
 targetHostPlatform=aarch64-unknown-linux-gnu
 nativeHostGhc=9.8.4
 crossGhc948=9.4.8
+targetSideGhc948Compiler=ghc-aarch64-unknown-linux-gnu-9.4.8
+buildHostCrossGhc948Compiler=aarch64-unknown-linux-gnu-ghc-9.4.8
+consumerPluginShape=native build-host plugin built by consumer-ghc948-plugin
 crossGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
-nextStep=use haskell.nix or another cross-GHC provider for a real targetHaskellPkgs
+nextStep=run consumer-ghc948-cross-worker-smoke to test cross-GHC plus native same-version plugin plus GHC 9.8.4 worker
 ```
 
 ## Conclusion
@@ -149,10 +152,16 @@ Plain nixpkgs does not currently provide cross GHC 9.8.4 for
 `pkgsCross.aarch64-multiplatform`, but it does provide a cross GHC 9.4.8
 candidate.
 
-The next step should not be a full haskell.nix migration by default. Instead,
-investigate whether the consumer-side plugin can support GHC 9.4.8, while
-keeping the existing GHC 9.8.4 host worker, protocol, and worker wiring
-unchanged.
+This early probe led to two branches:
+
+- GHC 9.4.8 is a useful plain-nixpkgs baseline, but its tested binary does not
+  expose `-fplugin-library` and the normal `-fplugin` path blocks before
+  `runMetaHook`;
+- GHC 9.10.3 plus a small patched cross-GHC derivation now provides the current
+  successful path for `-fplugin-library`, the host worker smoke, and the Cabal
+  package smoke.
+
+The current successful Nix path is documented in `docs/nix-integration.md`.
 
 See `docs/ghc-9.4.8-consumer-plugin.md` for the first consumer-side GHC 9.4.8
 API check. The plugin library now builds natively with GHC 9.4.8 through:
@@ -755,9 +764,12 @@ nix/patches/ghc-9.10.3-ignore-empty-th-finalizers.patch:
   ignore addModFinalizersWithLclEnv (ThModFinalizers []).
 ```
 
-The next step is to turn the experiment into the smallest documented GHC patch
-set. Remaining fallback options, if later cases require more than the current
-minimal patch set, are more invasive:
+This patch set is the current smallest documented GHC-side shape that passes the
+direct worker smoke and the Setup-based Cabal package smoke in this repository.
+Future work is to decide which parts are upstreamable and whether the same shape
+can be integrated through nixpkgs' Haskell generic builder. Remaining fallback
+options, if later cases require more than the current minimal patch set, are
+more invasive:
 
 ```text
 force the relevant internal-interpreter Cabal flag/CPP path in the GHC build;
@@ -768,10 +780,11 @@ an external plugin.
 
 ### Internal Static Plugin Or Patched GHC Main
 
-If a suitable `-fplugin-library` cross-GHC cannot be obtained, the next fallback
-is to avoid runtime plugin loading entirely. Link `THCross.Plugin.plugin` into
-the compiler/driver side and install it as an internal static plugin, or patch
-the GHC frontend to install the same `runMetaHook` directly.
+If a suitable `-fplugin-library` cross-GHC cannot be obtained for another GHC
+version or target, one fallback is to avoid runtime plugin loading entirely.
+Link `THCross.Plugin.plugin` into the compiler/driver side and install it as an
+internal static plugin, or patch the GHC frontend to install the same
+`runMetaHook` directly.
 
 Expected shape:
 
