@@ -8,17 +8,22 @@
       updateScript = pkgs.writeShellScriptBin "th-cross-regen-cabal-nix" ''
         set -euo pipefail
 
-        repo_root="$PWD"
-        mkdir -p "$repo_root/nix/generated"
+        mkdir -p nix/generated
 
-        ${pkgs.cabal2nix}/bin/cabal2nix "$repo_root/prototype/th-cross-plugin" \
-          > "$repo_root/nix/generated/th-cross-plugin.nix"
+        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-cross-plugin \
+          > nix/generated/th-cross-plugin.nix
 
-        ${pkgs.cabal2nix}/bin/cabal2nix "$repo_root/prototype/th-host-worker" \
-          > "$repo_root/nix/generated/th-host-worker.nix"
+        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-host-worker \
+          > nix/generated/th-host-worker.nix
 
-        ${pkgs.cabal2nix}/bin/cabal2nix "$repo_root/prototype/th-consumer-example" \
-          > "$repo_root/nix/generated/th-consumer-example.nix"
+        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-consumer-example \
+          > nix/generated/th-consumer-example.nix
+
+        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-microlens-consumer \
+          > nix/generated/th-microlens-consumer.nix
+
+        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-executable-consumer \
+          > nix/generated/th-executable-consumer.nix
       '';
     in
     {

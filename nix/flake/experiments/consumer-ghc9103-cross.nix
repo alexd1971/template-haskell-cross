@@ -133,23 +133,38 @@ EOF
       nativeGhcPkg = "${pkgs.haskell.compiler.ghc9103}/bin/ghc-pkg";
       defaultWorker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
 
+      componentDependencyFields = [
+        "libraryHaskellDepends"
+        "executableHaskellDepends"
+        "testHaskellDepends"
+        "benchmarkHaskellDepends"
+      ];
+
+      componentHaskellDepends =
+        args:
+        pkgs.lib.concatMap
+          (field: args.${field} or [ ])
+          componentDependencyFields;
+
       # The generated cabal2nix derivation passes concrete dependency
-      # derivations in `libraryHaskellDepends`. For this prototype, their Nix
-      # package names are also the names we expose in the host GHC session.
+      # derivations in component-specific `*HaskellDepends` fields. For this
+      # prototype, their Nix package names are also the names we expose in the
+      # host GHC session.
       hostPackageNamesFor =
         args:
-        builtins.filter
-          (packageName:
-            packageName != null
-            && packageName != "base"
-            && packageName != "template-haskell")
-          (map
-            (dependency:
-              if dependency == null then
-                null
-              else
-                pkgs.lib.getName dependency)
-            (args.libraryHaskellDepends or [ ]));
+        pkgs.lib.unique
+          (builtins.filter
+            (packageName:
+              packageName != null
+              && packageName != "base"
+              && packageName != "template-haskell")
+            (map
+              (dependency:
+                if dependency == null then
+                  null
+                else
+                  pkgs.lib.getName dependency)
+              (componentHaskellDepends args)));
 
       # Real TH generators often live in dependencies. The worker evaluates
       # splices with native GHC 9.8.4, so give it a host-side package DB that
@@ -238,6 +253,11 @@ EOF
         crossHaskellPkgs.callPackage ../../../nix/generated/th-microlens-consumer.nix {
           mkDerivation = mkConsumerDerivationWithWorker;
         };
+
+      executableConsumer =
+        crossHaskellPkgs.callPackage ../../../nix/generated/th-executable-consumer.nix {
+          mkDerivation = mkConsumerDerivationWithWorker;
+        };
     };
 in
 {
@@ -281,5 +301,6 @@ in
     consumer-ghc9103-cross-cabal-package = manualSetupPackage;
     consumer-ghc9103-cross-generic-package = genericBuilderPackages.example;
     consumer-ghc9103-cross-microlens-package = genericBuilderPackages.microlensConsumer;
+    consumer-ghc9103-cross-executable-package = genericBuilderPackages.executableConsumer;
   };
 }

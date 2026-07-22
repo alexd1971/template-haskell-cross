@@ -56,6 +56,7 @@ packages.${system}.consumer-ghc9103-cross-worker-smoke
 packages.${system}.consumer-ghc9103-cross-cabal-package
 packages.${system}.consumer-ghc9103-cross-generic-package
 packages.${system}.consumer-ghc9103-cross-microlens-package
+packages.${system}.consumer-ghc9103-cross-executable-package
 packages.${system}.consumer-ghc9103-cross-plugin-library-probe
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
@@ -121,6 +122,10 @@ host architecture:
   `microlens-th` generator package and runs a declaration splice
   `makeLenses ''User` through the GHC 9.8.4 host worker while cross-compiling
   the package with the patched aarch64 GHC 9.10.3;
+- `consumer-ghc9103-cross-executable-package` builds
+  `th-executable-consumer`, an executable-only package with the same
+  `microlens-th` declaration splice. This checks that host package discovery is
+  not limited to library components;
 - `consumer-ghc9103-plugin` comes from `consumerGhc9103HaskellPkgs` and is
   built with GHC 9.10.3;
 - `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
@@ -151,11 +156,11 @@ accidentally resolve to the consumer compiler package set.
 Experiments that evaluate TH generators from dependencies wrap the worker with
 an additional host-side package environment. In the current generic-builder
 prototype, the wrapper extracts package names from the generated derivation's
-`libraryHaskellDepends`, filters out boot packages such as `base` and
-`template-haskell`, and builds a GHC 9.8.4 `ghcWithPackages` environment for
-those names. For example, `consumer-ghc9103-cross-microlens-package` derives
-`microlens` and `microlens-th`, then passes the matching libdir to the worker
-wrapper:
+component-specific `*HaskellDepends` fields, filters out boot packages such as
+`base` and `template-haskell`, and builds a GHC 9.8.4 `ghcWithPackages`
+environment for those names. For example,
+`consumer-ghc9103-cross-microlens-package` derives `microlens` and
+`microlens-th`, then passes the matching libdir to the worker wrapper:
 
 ```text
 TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.8.4-with-packages/lib/ghc-9.8.4/lib
@@ -617,7 +622,7 @@ conf. During the build, the cross-GHC intercepts the declaration splice:
 module: Example
 kind: declaration
 expression: makeLenses ''User
-worker: /nix/store/...-th-host-worker-ghc984-with-microlens/bin/th-host-worker
+worker: /nix/store/...-th-host-worker-ghc984-with-host-packages/bin/th-host-worker
 th-host-worker: cache miss src/Example.hs
 ```
 
@@ -631,13 +636,24 @@ This confirms a stronger case than the local toy package:
   renamed/typechecked in the target module;
 - the target package is built and installed as an aarch64 package.
 
+Run the executable-component dependency smoke:
+
+```bash
+nix build .#consumer-ghc9103-cross-executable-package -L --allow-import-from-derivation
+find -L result -maxdepth 8 \( -name 'th-executable-consumer' -o -name '*.conf' \) -print
+```
+
+Observed result: the package builds an aarch64 executable component and the same
+automatic host-package mechanism derives package names from
+`executableHaskellDepends`, not `libraryHaskellDepends`.
+
 Current blocker: host-side dependency context derivation is only heuristic. The
-Nix experiment derives package names from `libraryHaskellDepends`, builds a
-matching GHC 9.8.4 host package DB, and passes matching `host-package` plugin
-options automatically. A production integration still needs a more exact
-component model for executables, tests, benchmarks, conditional dependencies,
-package flags, renamed packages, and cases where the host package name differs
-from the target dependency name.
+Nix experiment derives package names from component `*HaskellDepends` fields,
+builds a matching GHC 9.8.4 host package DB, and passes matching `host-package`
+plugin options automatically. A production integration still needs a more exact
+component model for conditional dependencies, package flags, renamed packages,
+internal libraries, setup dependencies, and cases where the host package name
+differs from the target dependency name.
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
 
