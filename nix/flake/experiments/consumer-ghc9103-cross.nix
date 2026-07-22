@@ -133,18 +133,39 @@ EOF
       nativeGhcPkg = "${pkgs.haskell.compiler.ghc9103}/bin/ghc-pkg";
       defaultWorker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
 
-      # Real TH generators often live in dependencies. The host worker evaluates
-      # the splice with native GHC 9.8.4, so it needs a host-side package
-      # database containing those generator dependencies, not only target
-      # packages from the cross build.
-      hostGhcWithMicrolens =
-        pkgs.haskell.packages.ghc984.ghcWithPackages (hpkgs: [
-          hpkgs.microlens-th
-        ]);
+      # The generated cabal2nix derivation passes concrete dependency
+      # derivations in `libraryHaskellDepends`. For this prototype, their Nix
+      # package names are also the names we expose in the host GHC session.
+      hostPackageNamesFor =
+        args:
+        builtins.filter
+          (packageName:
+            packageName != null
+            && packageName != "base"
+            && packageName != "template-haskell")
+          (map
+            (dependency:
+              if dependency == null then
+                null
+              else
+                pkgs.lib.getName dependency)
+            (args.libraryHaskellDepends or [ ]));
 
-      workerWithMicrolens =
-        pkgs.runCommand
-          "th-host-worker-ghc984-with-microlens"
+      # Real TH generators often live in dependencies. The worker evaluates
+      # splices with native GHC 9.8.4, so give it a host-side package DB that
+      # mirrors the target component dependencies by package name.
+      mkWorkerWithHostPackages =
+        hostPackages:
+        if hostPackages == [ ] then
+          defaultWorker
+        else
+          let
+            hostGhcWithPackages =
+              pkgs.haskell.packages.ghc984.ghcWithPackages
+                (hpkgs: map (packageName: hpkgs.${packageName}) hostPackages);
+          in
+          "${pkgs.runCommand
+            "th-host-worker-ghc984-with-host-packages"
           {
             nativeBuildInputs = [
               pkgs.makeWrapper
@@ -155,8 +176,8 @@ EOF
             makeWrapper \
               ${hs.hostHaskellPkgs.th-host-worker}/bin/.th-host-worker-wrapped \
               "$out/bin/th-host-worker" \
-              --set TH_HOST_GHC_LIBDIR "${hostGhcWithMicrolens}/lib/ghc-9.8.4/lib"
-          '';
+              --set TH_HOST_GHC_LIBDIR "${hostGhcWithPackages}/lib/ghc-9.8.4/lib"
+          ''}/bin/th-host-worker";
 
       # Build a target package set around the patched cross-GHC. The stock
       # nixpkgs aarch64 GHC 9.10.3 package set uses the unpatched compiler, so
@@ -175,9 +196,11 @@ EOF
         };
 
       mkConsumerDerivationWithWorker =
-        worker:
-        hostPackages:
         args:
+        let
+          hostPackages = hostPackageNamesFor args;
+          worker = mkWorkerWithHostPackages hostPackages;
+        in
         crossHaskellPkgs.mkDerivation
           (args // {
             doCheck = false;
@@ -208,18 +231,12 @@ EOF
     {
       example =
         crossHaskellPkgs.callPackage ../../../nix/generated/th-consumer-example.nix {
-          mkDerivation = mkConsumerDerivationWithWorker defaultWorker [ ];
+          mkDerivation = mkConsumerDerivationWithWorker;
         };
 
       microlensConsumer =
         crossHaskellPkgs.callPackage ../../../nix/generated/th-microlens-consumer.nix {
-          mkDerivation =
-            mkConsumerDerivationWithWorker
-              "${workerWithMicrolens}/bin/th-host-worker"
-              [
-                "microlens"
-                "microlens-th"
-              ];
+          mkDerivation = mkConsumerDerivationWithWorker;
         };
     };
 in

@@ -148,17 +148,21 @@ The libdir is passed explicitly from `nix/flake/haskell-pkgs.nix`; it is not
 inferred from a generic `ghc` argument in the worker wrapper, because that can
 accidentally resolve to the consumer compiler package set.
 
-Experiments that evaluate TH generators from dependencies currently wrap the
-worker with an additional host-side package environment. For example,
-`consumer-ghc9103-cross-microlens-package` uses a GHC 9.8.4
-`ghcWithPackages` environment containing `microlens-th`, passes the matching
-libdir to the worker wrapper:
+Experiments that evaluate TH generators from dependencies wrap the worker with
+an additional host-side package environment. In the current generic-builder
+prototype, the wrapper extracts package names from the generated derivation's
+`libraryHaskellDepends`, filters out boot packages such as `base` and
+`template-haskell`, and builds a GHC 9.8.4 `ghcWithPackages` environment for
+those names. For example, `consumer-ghc9103-cross-microlens-package` derives
+`microlens` and `microlens-th`, then passes the matching libdir to the worker
+wrapper:
 
 ```text
 TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.8.4-with-packages/lib/ghc-9.8.4/lib
 ```
 
-and passes host package exposure through plugin options:
+The same derived names are passed as host package exposure through plugin
+options:
 
 ```text
 -fplugin-opt=THCross.Plugin:host-package=microlens
@@ -169,8 +173,12 @@ The plugin serializes these package names into the JSON-lines splice request as
 `hostPackages`. The worker turns them into host-side `-package` flags before
 loading the source module. `TH_HOST_GHC_PACKAGES` is still accepted as a local
 fallback, but the preferred prototype path is protocol-visible data from the
-cross-side plugin. A real integration should derive these flags from the Cabal
-component or Nix package context instead of duplicating them manually.
+cross-side plugin.
+
+This is still a prototype heuristic. It assumes the target dependency package
+name is also a valid attribute/package name in `pkgs.haskell.packages.ghc984`.
+That works for the current `microlens` smoke test but is not yet a complete
+Cabal component context model.
 
 The top-level `flake.nix` is intentionally only a thin entrypoint. The Nix
 flake implementation lives under `nix/flake/`:
@@ -623,12 +631,13 @@ This confirms a stronger case than the local toy package:
   renamed/typechecked in the target module;
 - the target package is built and installed as an aarch64 package.
 
-Current blocker: the host-side dependency context is still manual. The Nix
-experiment explicitly creates a GHC 9.8.4 `ghcWithPackages` environment and
-passes matching `host-package` plugin options. A production integration must
-derive the host package DB and package exposure flags from the
-package/component context instead of requiring users to maintain this list by
-hand.
+Current blocker: host-side dependency context derivation is only heuristic. The
+Nix experiment derives package names from `libraryHaskellDepends`, builds a
+matching GHC 9.8.4 host package DB, and passes matching `host-package` plugin
+options automatically. A production integration still needs a more exact
+component model for executables, tests, benchmarks, conditional dependencies,
+package flags, renamed packages, and cases where the host package name differs
+from the target dependency name.
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
 
