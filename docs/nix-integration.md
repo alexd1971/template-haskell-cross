@@ -53,6 +53,7 @@ packages.${system}.consumer-ghc9103-cross-ghc-forced-internal-interpreter
 packages.${system}.consumer-ghc9103-cross-plugin-library-bootstrapped-probe
 packages.${system}.consumer-ghc9103-cross-plugin-library-forced-internal-interpreter-probe
 packages.${system}.consumer-ghc9103-cross-worker-smoke
+packages.${system}.consumer-ghc9103-cross-cabal-package
 packages.${system}.consumer-ghc9103-cross-cabal-package-smoke
 packages.${system}.consumer-ghc9103-cross-plugin-library-probe
 packages.${system}.consumer-ghc9103-plugin
@@ -102,10 +103,12 @@ host architecture:
   runs the `-fplugin-library` check against that forced build;
 - `consumer-ghc9103-cross-worker-smoke` uses that forced cross-GHC to compile a
   real expression splice through `THCross.Plugin` and the GHC 9.8.4 host worker;
-- `consumer-ghc9103-cross-cabal-package-smoke` copies the checked-in
-  `th-consumer-example` package, runs Cabal's `Setup configure` and
-  `Setup build` with the forced aarch64 cross-GHC, and verifies that the package
-  component build reaches the plugin and host worker;
+- `consumer-ghc9103-cross-cabal-package` copies the checked-in
+  `th-consumer-example` package, runs Cabal's `Setup configure`, `Setup build`,
+  and `Setup copy` with the forced aarch64 cross-GHC, and installs the package
+  output under `$out`;
+- `consumer-ghc9103-cross-cabal-package-smoke` is currently an alias for
+  `consumer-ghc9103-cross-cabal-package`, kept for the earlier smoke-test name;
 - `consumer-ghc9103-plugin` comes from `consumerGhc9103HaskellPkgs` and is
   built with GHC 9.10.3;
 - `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
@@ -540,8 +543,8 @@ nix build .#consumer-ghc9103-package
 Run the aarch64 cross-GHC Cabal package smoke:
 
 ```bash
-nix build .#consumer-ghc9103-cross-cabal-package-smoke
-cat result
+nix build .#consumer-ghc9103-cross-cabal-package
+cat result/nix-support/build-log
 ```
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
@@ -592,11 +595,11 @@ The native package-level check additionally confirms that plugin options can be
 wired through a Cabal package derivation rather than only through a direct `ghc`
 invocation.
 
-The cross Cabal package smoke is the first package-shaped aarch64 build path in
-this flake. It copies `prototype/th-consumer-example`, creates a standard
-`Setup.hs`, runs `Setup configure` with the patched aarch64 cross-GHC and then
-runs `Setup build`. The package is not installed yet; the derivation writes a
-diagnostic report to `$out`.
+The cross Cabal package derivation is the first package-shaped aarch64 build
+path in this flake. It copies `prototype/th-consumer-example`, creates a
+standard `Setup.hs`, runs `Setup configure` with the patched aarch64 cross-GHC,
+then runs `Setup build` and `Setup copy`. The package output is installed under
+`$out`; the diagnostic log is written to `$out/nix-support/build-log`.
 
 Observed package-level output:
 
@@ -621,7 +624,7 @@ Observed cross Cabal package output:
 
 ```text
 cabal package: th-consumer-example
-configure/build with Setup.hs and cross-GHC:
+configure/build/copy with Setup.hs and cross-GHC:
 Configuring th-consumer-example-0.1.0.0...
 Preprocessing library for th-consumer-example-0.1.0.0...
 Building library for th-consumer-example-0.1.0.0...
@@ -633,9 +636,8 @@ expression: ([| 42 |])
 worker: /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
 th-cross: started worker /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
 th-host-worker: cache miss src/Example.hs
+Installing library in /nix/store/...-th-consumer-example-aarch64-unknown-linux-gnu-0.1.0.0/lib
 
-configureExit=0
-buildExit=0
 status=ok
 ```
 
@@ -645,6 +647,8 @@ This confirms:
 - Cabal configures the library component with the patched aarch64 cross-GHC;
 - the cross-GHC loads `THCross.Plugin` through `-fplugin-library`;
 - the plugin delegates TH execution to the native GHC 9.8.4 worker;
+- Cabal installs the resulting target library output under the derivation
+  output path;
 - Cabal receives target object output, unlike the earlier failed `-fno-code`
   attempt where `ar` could not find `Example.o`.
 
@@ -751,10 +755,10 @@ cabal \
 
 ## Next Step
 
-The current local proof includes a successful Setup-based Cabal package build
-for `th-consumer-example` with the patched aarch64 GHC 9.10.3 cross compiler.
-The next Nix integration step should move from this diagnostic `Setup.hs`
-smoke toward normal package-set integration:
+The current local proof includes a successful Setup-based Cabal package
+derivation for `th-consumer-example` with the patched aarch64 GHC 9.10.3 cross
+compiler. The next Nix integration step should move from this hand-written
+Setup-based derivation toward normal package-set integration:
 
 - a native host package set for `th-host-worker`;
 - a target package set for the consumer package;
@@ -770,10 +774,10 @@ smoke toward normal package-set integration:
 
 Concrete next candidates are:
 
-- convert `consumer-ghc9103-cross-cabal-package-smoke` from a diagnostic report
-  derivation into a package derivation that installs build outputs;
 - try integrating the same flags into nixpkgs' Haskell generic builder for the
   consumer package;
+- decide whether the Setup-based package derivation should become a reusable
+  helper for package-level cross tests;
 - only then add Android/aarch64 package-set details.
 
 The current flake intentionally does not add `aarch64-linux` to `systems`.

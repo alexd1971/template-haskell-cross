@@ -15,7 +15,7 @@ let
     worker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
   };
 
-  cabalPackageSmoke =
+  cabalPackage =
     let
       crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
       crossTargetTriple = crossPkgs.stdenv.hostPlatform.config;
@@ -28,7 +28,7 @@ let
       worker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
     in
     pkgs.runCommand
-      "th-cross-consumer-ghc9103-cross-cabal-package-smoke"
+      "th-consumer-example-aarch64-unknown-linux-gnu-0.1.0.0"
       {
         nativeBuildInputs = [
           pkgs.haskell.compiler.ghc9103
@@ -36,6 +36,9 @@ let
         ];
       }
       ''
+        mkdir -p "$out/nix-support"
+        report="$out/nix-support/build-log"
+
         build_dir="$TMPDIR/consumer-ghc9103-cross-cabal-package-build"
         mkdir -p "$build_dir"
         cp -R ${../../../prototype/th-consumer-example} "$build_dir/th-consumer-example"
@@ -74,44 +77,35 @@ EOF
           echo "pluginUnit=$plugin_unit"
           echo
           echo "cabal package: th-consumer-example"
-          echo "configure/build with Setup.hs and cross-GHC:"
-        } > "$out"
+          echo "configure/build/copy with Setup.hs and cross-GHC:"
+        } > "$report"
 
-        set +e
         ${pkgs.haskell.compiler.ghc9103}/bin/runghc Setup.hs configure \
           --builddir=dist-cross \
           --with-compiler="${crossGhc}" \
           --with-hc-pkg="${crossGhcPkg}" \
           --with-ld="${crossBinutils}/bin/${crossTargetTriple}-ld" \
           --with-ar="${crossBinutils}/bin/${crossTargetTriple}-ar" \
-          --prefix="$TMPDIR/install" \
+          --with-strip="${crossBinutils}/bin/${crossTargetTriple}-strip" \
+          --prefix="$out" \
+          --libdir="$out/lib" \
+          --docdir="$out/share/doc/th-consumer-example-0.1.0.0" \
           --ghc-option=-v0 \
           --ghc-option=-fno-external-interpreter \
           --ghc-option=-fforce-recomp \
           "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;[\"worker=${worker}\"]" \
-          >> "$out" 2>&1
-        configure_exit="$?"
+          >> "$report" 2>&1
 
-        if [ "$configure_exit" -eq 0 ]; then
-          ${pkgs.haskell.compiler.ghc9103}/bin/runghc Setup.hs build \
-            --builddir=dist-cross \
-            >> "$out" 2>&1
-          build_exit="$?"
-        else
-          build_exit=125
-        fi
-        set -e
+        ${pkgs.haskell.compiler.ghc9103}/bin/runghc Setup.hs build \
+          --builddir=dist-cross \
+          >> "$report" 2>&1
 
-        {
-          echo
-          echo "configureExit=$configure_exit"
-          echo "buildExit=$build_exit"
-          if [ "$configure_exit" -eq 0 ] && [ "$build_exit" -eq 0 ]; then
-            echo "status=ok"
-          else
-            echo "status=blocked"
-          fi
-        } >> "$out"
+        ${pkgs.haskell.compiler.ghc9103}/bin/runghc Setup.hs copy \
+          --builddir=dist-cross \
+          >> "$report" 2>&1
+
+        echo >> "$report"
+        echo "status=ok" >> "$report"
       '';
 in
 {
@@ -152,6 +146,7 @@ in
           crossGhcDrv = crossGhc9103Aarch64.forcedInternalInterpreter;
         });
 
-    consumer-ghc9103-cross-cabal-package-smoke = cabalPackageSmoke;
+    consumer-ghc9103-cross-cabal-package = cabalPackage;
+    consumer-ghc9103-cross-cabal-package-smoke = cabalPackage;
   };
 }
