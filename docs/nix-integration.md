@@ -56,6 +56,7 @@ packages.${system}.consumer-ghc9103-cross-worker-smoke
 packages.${system}.consumer-ghc9103-cross-cabal-package
 packages.${system}.consumer-ghc9103-cross-generic-package
 packages.${system}.consumer-ghc9103-cross-microlens-package
+packages.${system}.consumer-ghc9103-cross-microlens-cabal-context-probe
 packages.${system}.consumer-ghc9103-cross-executable-package
 packages.${system}.consumer-ghc9103-cross-executable-qemu-smoke
 packages.${system}.consumer-ghc9103-cross-plugin-library-probe
@@ -159,11 +160,12 @@ accidentally resolve to the consumer compiler package set.
 
 Experiments that evaluate TH generators from dependencies wrap the worker with
 an additional host-side package environment. In the current generic-builder
-prototype, the wrapper reads concrete dependency derivations from the generated
-derivation's component-specific `*HaskellDepends` fields, extracts each
-dependency's Haskell `pname`, filters out boot packages such as `base` and
-`template-haskell`, and builds a GHC 9.8.4 `ghcWithPackages` environment for
-those names. For example,
+prototype, the wrapper first instantiates the package normally with nixpkgs'
+Haskell builder and reads its `passthru.getCabalDeps`. That exposes concrete
+dependency derivations grouped by component-specific `*HaskellDepends` fields.
+The integration extracts each dependency's Haskell `pname`, filters out boot
+packages such as `base` and `template-haskell`, and builds a GHC 9.8.4
+`ghcWithPackages` environment for those names. For example,
 `consumer-ghc9103-cross-microlens-package` derives `microlens` and
 `microlens-th`, then passes the matching libdir to the worker wrapper:
 
@@ -186,11 +188,61 @@ before loading the source module. `TH_HOST_GHC_PACKAGE_IDS` is accepted as an
 environment-variable fallback for manual experiments, but the preferred
 prototype path is exact unit-id data from the cross-side plugin.
 
-This still assumes that each extracted package `pname` is available under the
-same attribute name in `pkgs.haskell.packages.ghc984`. Resolving the final GHC
-unit id through host `ghc-pkg` avoids ambiguity between multiple installed
-instances, but the surrounding package selection is not yet a complete Cabal
-component context model.
+This uses nixpkgs' own evaluation-time Haskell dependency metadata instead of
+parsing the `.cabal` file directly. It still assumes that each extracted package
+`pname` is available under the same attribute name in
+`pkgs.haskell.packages.ghc984`. Resolving the final GHC unit id through host
+`ghc-pkg` avoids ambiguity between multiple installed instances, but the
+surrounding package selection is not yet a complete Cabal component context
+model.
+
+Worker-enabled package builds validate this evaluation-time dependency context
+after `Setup configure`. The validation reads Cabal's persisted
+`dist/setup-config`, extracts Cabal-resolved package names for all configured
+components, filters out boot packages, and compares the result with the
+evaluation-time names used to build the host worker package DB. The build fails
+before `Setup build` if the sets differ.
+
+### Cabal `setup-config` Probe
+
+The experiment also exposes the same validation as a standalone probe for
+inspection:
+
+```bash
+nix build .#consumer-ghc9103-cross-microlens-cabal-context-probe -L --allow-import-from-derivation
+cat result/nix-support/cabal-component-deps
+```
+
+The probe runs after `Setup configure`, reads Cabal's persisted
+`dist/setup-config` with `Distribution.Simple.Configure.getPersistBuildConfig`,
+walks `Distribution.Simple.LocalBuildInfo.allComponentsInBuildOrder`, and
+prints each component's `componentPackageDeps`.
+
+The output includes:
+
+```text
+result/nix-support/cabal-component-deps
+result/nix-support/cabal-derived-package-names
+result/nix-support/nix-derived-host-package-names.sorted
+result/nix-support/package-name-diff
+```
+
+For the current `microlens` fixture, the Cabal-derived and Nix-derived package
+name sets both contain:
+
+```text
+microlens
+microlens-th
+```
+
+Worker-enabled builds and the standalone probe both fail if those sets diverge.
+
+The Cabal `setup-config` data is the most direct source for Cabal-resolved
+component dependencies, but it is produced during the build phase. That is too
+late to choose the Nix host `ghcWithPackages` closure for the same derivation,
+because Nix store inputs must already be fixed during evaluation. The current
+integration therefore uses nixpkgs dependency metadata to choose the host
+package closure and uses `setup-config` as a fail-fast validation source.
 
 The top-level `flake.nix` is intentionally only a thin entrypoint. The Nix
 flake implementation lives under `nix/flake/`:
@@ -668,14 +720,15 @@ output="Ada"
 status=ok
 ```
 
-Current blocker: host-side dependency context derivation is still incomplete.
-The Nix experiment reads component `*HaskellDepends` derivations, extracts
-their Haskell `pname`, builds a matching GHC 9.8.4 host package DB, resolves
-exact host unit ids with host `ghc-pkg`, and passes matching `host-package-id`
-plugin options automatically. A production integration still needs a more exact
-component model for conditional dependencies, package flags, renamed packages,
-internal libraries, setup dependencies, and packages whose host package-set
-attribute is not the same as the Cabal package name.
+Current blocker: host-side dependency context derivation is improved but still
+incomplete. The Nix experiment reads nixpkgs Haskell derivation
+`passthru.getCabalDeps`, extracts dependency `pname`s, builds a matching GHC
+9.8.4 host package DB, resolves exact host unit ids with host `ghc-pkg`, and
+passes matching `host-package-id` plugin options automatically. It also validates
+the selected package names against Cabal `setup-config` after configuration. A
+production integration still needs a model for renamed packages, internal
+libraries, setup dependencies, and packages whose host package-set attribute is
+not the same as the Cabal package name.
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
 

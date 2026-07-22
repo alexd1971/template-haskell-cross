@@ -140,18 +140,17 @@ EOF
         "benchmarkHaskellDepends"
       ];
 
-      componentHaskellDepends =
-        args:
+      componentHaskellDependsFromCabalDeps =
+        cabalDeps:
         pkgs.lib.concatMap
-          (field: args.${field} or [ ])
+          (field: cabalDeps.${field} or [ ])
           componentDependencyFields;
 
-      # The generated cabal2nix derivation passes concrete dependency
-      # derivations in component-specific `*HaskellDepends` fields. Use their
-      # Haskell package `pname`, not the full derivation name, as the key for
-      # the corresponding host package set.
-      hostPackageNamesFor =
-        args:
+      # nixpkgs Haskell derivations expose their Cabal dependency fields through
+      # `passthru.getCabalDeps`. Use dependency `pname`, not the full derivation
+      # name, as the key for the corresponding host package set.
+      hostPackageNamesFromCabalDeps =
+        cabalDeps:
         pkgs.lib.unique
           (builtins.filter
             (packageName:
@@ -164,7 +163,7 @@ EOF
                   null
                 else
                   dependency.pname)
-              (componentHaskellDepends args)));
+              (componentHaskellDependsFromCabalDeps cabalDeps)));
 
       # Real TH generators often live in dependencies. The worker evaluates
       # splices with native GHC 9.8.4, so give it a host-side package DB that
@@ -216,10 +215,74 @@ EOF
               };
         };
 
+      cabalContextValidationScript =
+        expectedHostPackageNames:
+        ''
+          cat > dump-cabal-component-deps.hs <<'EOF'
+import Distribution.Simple.Configure (getPersistBuildConfig)
+import Distribution.Simple.LocalBuildInfo (allComponentsInBuildOrder)
+import Distribution.Types.ComponentLocalBuildInfo
+  (componentLocalName, componentPackageDeps)
+import Distribution.Types.ComponentName (showComponentName)
+import Distribution.Types.MungedPackageId (mungedName)
+import Distribution.Types.MungedPackageName (encodeCompatPackageName)
+import Distribution.Types.PackageName (unPackageName)
+import Distribution.Types.UnitId (unUnitId)
+
+main :: IO ()
+main = do
+  localBuildInfo <- getPersistBuildConfig "dist"
+  mapM_ printComponent (allComponentsInBuildOrder localBuildInfo)
+
+printComponent component = do
+  putStrLn ("component " <> showComponentName (componentLocalName component))
+  mapM_ printDependency (componentPackageDeps component)
+
+printDependency (unitId, packageId) =
+  putStrLn
+    ( "  "
+        <> unPackageName (encodeCompatPackageName (mungedName packageId))
+        <> " "
+        <> unUnitId unitId
+    )
+EOF
+
+          mkdir -p "$out/nix-support"
+          ${pkgs.haskell.compiler.ghc9103}/bin/ghc \
+            -v0 \
+            -package Cabal \
+            --make dump-cabal-component-deps.hs \
+            -o dump-cabal-component-deps
+
+          ./dump-cabal-component-deps \
+            > "$out/nix-support/cabal-component-deps"
+
+          cat > "$out/nix-support/nix-derived-host-package-names" <<'EOF'
+${pkgs.lib.concatStringsSep "\n" expectedHostPackageNames}
+EOF
+
+          awk '/^  / { print $1 }' "$out/nix-support/cabal-component-deps" \
+            | grep -v -E '^(base|template-haskell)$' \
+            | sort -u \
+            > "$out/nix-support/cabal-derived-package-names"
+
+          sort -u "$out/nix-support/nix-derived-host-package-names" \
+            > "$out/nix-support/nix-derived-host-package-names.sorted"
+
+          if ! diff -u \
+            "$out/nix-support/nix-derived-host-package-names.sorted" \
+            "$out/nix-support/cabal-derived-package-names" \
+            > "$out/nix-support/package-name-diff"; then
+            echo "Nix-derived host package names differ from Cabal setup-config package names" >&2
+            cat "$out/nix-support/package-name-diff" >&2
+            exit 1
+          fi
+        '';
+
       mkConsumerDerivationWithWorker =
+        hostPackageNames:
         args:
         let
-          hostPackageNames = hostPackageNamesFor args;
           workerContext = mkWorkerWithHostPackages hostPackageNames;
         in
         crossHaskellPkgs.mkDerivation
@@ -229,7 +292,8 @@ EOF
             doHoogle = false;
             enableExternalInterpreter = false;
             enableLibraryProfiling = false;
-            preConfigure = ''
+            preConfigure = (args.preConfigure or "") + ''
+
               ${pluginLibraryMetadataScript {
                 inherit pluginLibDir nativeGhcPkg;
                 consumerGhcVersion = "9.10.3";
@@ -248,23 +312,61 @@ EOF
                 appendToVar configureFlags "--ghc-option=-fplugin-opt=THCross.Plugin:host-package-id=$host_package_id"
               '') hostPackageNames}
             '';
+            postConfigure =
+              pkgs.lib.concatStringsSep "\n" [
+                (args.postConfigure or "")
+                (cabalContextValidationScript hostPackageNames)
+              ];
           });
+
+      mkCabalContextProbe =
+        expectedHostPackageNames:
+        args:
+        crossHaskellPkgs.mkDerivation
+          (args // {
+            doCheck = false;
+            doHaddock = false;
+            doHoogle = false;
+            enableLibraryProfiling = false;
+            postConfigure =
+              pkgs.lib.concatStringsSep "\n" [
+                (args.postConfigure or "")
+                (cabalContextValidationScript expectedHostPackageNames)
+              ];
+          });
+
+      callPackageWithWorker =
+        packageFile:
+        let
+          basePackage = crossHaskellPkgs.callPackage packageFile { };
+          hostPackageNames = hostPackageNamesFromCabalDeps basePackage.getCabalDeps;
+        in
+        crossHaskellPkgs.callPackage packageFile {
+          mkDerivation = mkConsumerDerivationWithWorker hostPackageNames;
+        };
+
+      callPackageCabalContextProbe =
+        packageFile:
+        let
+          basePackage = crossHaskellPkgs.callPackage packageFile { };
+          expectedHostPackageNames = hostPackageNamesFromCabalDeps basePackage.getCabalDeps;
+        in
+        crossHaskellPkgs.callPackage packageFile {
+          mkDerivation = mkCabalContextProbe expectedHostPackageNames;
+        };
     in
     {
       example =
-        crossHaskellPkgs.callPackage ../../../nix/generated/th-consumer-example.nix {
-          mkDerivation = mkConsumerDerivationWithWorker;
-        };
+        callPackageWithWorker ../../../nix/generated/th-consumer-example.nix;
 
       microlensConsumer =
-        crossHaskellPkgs.callPackage ../../../nix/generated/th-microlens-consumer.nix {
-          mkDerivation = mkConsumerDerivationWithWorker;
-        };
+        callPackageWithWorker ../../../nix/generated/th-microlens-consumer.nix;
 
       executableConsumer =
-        crossHaskellPkgs.callPackage ../../../nix/generated/th-executable-consumer.nix {
-          mkDerivation = mkConsumerDerivationWithWorker;
-        };
+        callPackageWithWorker ../../../nix/generated/th-executable-consumer.nix;
+
+      microlensConsumerCabalContextProbe =
+        callPackageCabalContextProbe ../../../nix/generated/th-microlens-consumer.nix;
 
       executableConsumerQemuSmoke =
         pkgs.runCommand
@@ -333,6 +435,8 @@ in
     consumer-ghc9103-cross-cabal-package = manualSetupPackage;
     consumer-ghc9103-cross-generic-package = genericBuilderPackages.example;
     consumer-ghc9103-cross-microlens-package = genericBuilderPackages.microlensConsumer;
+    consumer-ghc9103-cross-microlens-cabal-context-probe =
+      genericBuilderPackages.microlensConsumerCabalContextProbe;
     consumer-ghc9103-cross-executable-package = genericBuilderPackages.executableConsumer;
     consumer-ghc9103-cross-executable-qemu-smoke = genericBuilderPackages.executableConsumerQemuSmoke;
   };
