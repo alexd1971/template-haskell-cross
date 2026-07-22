@@ -171,7 +171,7 @@ captureModuleSplices request = do
   dependentFilesRef <- newIORef []
   foreignFilesRef <- newIORef []
   ghcLibDir <- getGhcLibDir
-  extraPackages <- getHostGhcPackages
+  extraPackages <- getHostGhcPackages request
   createDirectoryIfMissing True hostWorkerBuildDir
   result <- runGhc (Just ghcLibDir) $ do
     dflags <- getSessionDynFlags
@@ -242,12 +242,13 @@ getGhcLibDir = do
 -- | Package names to expose in the host-side GHC session.
 --
 -- A bare GHC API session does not know the Cabal component package flags from
--- the cross build. The first Nix prototype passes the host-buildable generator
--- dependencies explicitly through this environment variable.
-getHostGhcPackages :: IO [String]
-getHostGhcPackages = do
+-- the cross build. The prototype receives the explicit package list from the
+-- cross-side plugin request, with an environment-variable fallback for manual
+-- experiments.
+getHostGhcPackages :: SpliceRequest -> IO [String]
+getHostGhcPackages request = do
   explicitPackages <- lookupEnv "TH_HOST_GHC_PACKAGES"
-  pure (maybe [] words explicitPackages)
+  pure (requestHostPackages request <> maybe [] words explicitPackages)
 
 -- | Convert a package name into the DynFlags representation of @-package name@.
 exposeHostPackage :: String -> PackageFlag

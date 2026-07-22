@@ -55,6 +55,7 @@ packages.${system}.consumer-ghc9103-cross-plugin-library-forced-internal-interpr
 packages.${system}.consumer-ghc9103-cross-worker-smoke
 packages.${system}.consumer-ghc9103-cross-cabal-package
 packages.${system}.consumer-ghc9103-cross-generic-package
+packages.${system}.consumer-ghc9103-cross-microlens-package
 packages.${system}.consumer-ghc9103-cross-plugin-library-probe
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
@@ -115,6 +116,11 @@ host architecture:
   builder provide cross `ghc`, `ghc-pkg`, `gcc`, `ld`, `ar`, `strip`, package
   DB, and install layout handling. This is the current preferred package-level
   Nix shape;
+- `consumer-ghc9103-cross-microlens-package` builds
+  `th-microlens-consumer`, a small package that depends on the real
+  `microlens-th` generator package and runs a declaration splice
+  `makeLenses ''User` through the GHC 9.8.4 host worker while cross-compiling
+  the package with the patched aarch64 GHC 9.10.3;
 - `consumer-ghc9103-plugin` comes from `consumerGhc9103HaskellPkgs` and is
   built with GHC 9.10.3;
 - `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
@@ -141,6 +147,30 @@ while evaluating host-side TH.
 The libdir is passed explicitly from `nix/flake/haskell-pkgs.nix`; it is not
 inferred from a generic `ghc` argument in the worker wrapper, because that can
 accidentally resolve to the consumer compiler package set.
+
+Experiments that evaluate TH generators from dependencies currently wrap the
+worker with an additional host-side package environment. For example,
+`consumer-ghc9103-cross-microlens-package` uses a GHC 9.8.4
+`ghcWithPackages` environment containing `microlens-th`, passes the matching
+libdir to the worker wrapper:
+
+```text
+TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.8.4-with-packages/lib/ghc-9.8.4/lib
+```
+
+and passes host package exposure through plugin options:
+
+```text
+-fplugin-opt=THCross.Plugin:host-package=microlens
+-fplugin-opt=THCross.Plugin:host-package=microlens-th
+```
+
+The plugin serializes these package names into the JSON-lines splice request as
+`hostPackages`. The worker turns them into host-side `-package` flags before
+loading the source module. `TH_HOST_GHC_PACKAGES` is still accepted as a local
+fallback, but the preferred prototype path is protocol-visible data from the
+cross-side plugin. A real integration should derive these flags from the Cabal
+component or Nix package context instead of duplicating them manually.
 
 The top-level `flake.nix` is intentionally only a thin entrypoint. The Nix
 flake implementation lives under `nix/flake/`:
@@ -563,6 +593,42 @@ Observed result: the generic builder invokes the patched
 splice from `src/Example.hs`, where the splice calls a generator imported from
 `src/Gen.hs`, and installs target package artifacts including the package conf,
 `.hi`, `.dyn_hi`, static library, and shared library.
+
+Run the small real-generator dependency smoke:
+
+```bash
+nix build .#consumer-ghc9103-cross-microlens-package -L --allow-import-from-derivation
+find -L result -maxdepth 8 \( -name 'Example*.hi' -o -name 'Example*.dyn_hi' -o -name '*.conf' \) -print
+```
+
+Observed result: the package installs aarch64 target artifacts for
+`th-microlens-consumer`, including `Example.hi`, `Example.dyn_hi`, and a package
+conf. During the build, the cross-GHC intercepts the declaration splice:
+
+```text
+module: Example
+kind: declaration
+expression: makeLenses ''User
+worker: /nix/store/...-th-host-worker-ghc984-with-microlens/bin/th-host-worker
+th-host-worker: cache miss src/Example.hs
+```
+
+This confirms a stronger case than the local toy package:
+
+- the splice generator comes from a real dependency package, `microlens-th`;
+- the worker loads the source module with a host-side package DB containing
+  `microlens` and `microlens-th`;
+- the host worker evaluates a declaration splice that uses `reify`;
+- the generated declarations are returned as text, parsed by the cross-GHC, and
+  renamed/typechecked in the target module;
+- the target package is built and installed as an aarch64 package.
+
+Current blocker: the host-side dependency context is still manual. The Nix
+experiment explicitly creates a GHC 9.8.4 `ghcWithPackages` environment and
+passes matching `host-package` plugin options. A production integration must
+derive the host package DB and package exposure flags from the
+package/component context instead of requiring users to maintain this list by
+hand.
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
 

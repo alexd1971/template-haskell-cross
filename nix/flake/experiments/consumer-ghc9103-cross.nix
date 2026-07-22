@@ -155,8 +155,7 @@ EOF
             makeWrapper \
               ${hs.hostHaskellPkgs.th-host-worker}/bin/.th-host-worker-wrapped \
               "$out/bin/th-host-worker" \
-              --set TH_HOST_GHC_LIBDIR "${hostGhcWithMicrolens}/lib/ghc-9.8.4/lib" \
-              --set TH_HOST_GHC_PACKAGES "microlens microlens-th"
+              --set TH_HOST_GHC_LIBDIR "${hostGhcWithMicrolens}/lib/ghc-9.8.4/lib"
           '';
 
       # Build a target package set around the patched cross-GHC. The stock
@@ -177,6 +176,7 @@ EOF
 
       mkConsumerDerivationWithWorker =
         worker:
+        hostPackages:
         args:
         crossHaskellPkgs.mkDerivation
           (args // {
@@ -199,18 +199,27 @@ EOF
               appendToVar configureFlags "--ghc-option=-fno-external-interpreter"
               appendToVar configureFlags "--ghc-option=-fforce-recomp"
               appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;[\"worker=${worker}\"]"
+              ${pkgs.lib.concatMapStringsSep "\n" (packageName: ''
+                appendToVar configureFlags "--ghc-option=-fplugin-opt=THCross.Plugin:host-package=${packageName}"
+              '') hostPackages}
             '';
           });
     in
     {
       example =
         crossHaskellPkgs.callPackage ../../../nix/generated/th-consumer-example.nix {
-          mkDerivation = mkConsumerDerivationWithWorker defaultWorker;
+          mkDerivation = mkConsumerDerivationWithWorker defaultWorker [ ];
         };
 
       microlensConsumer =
         crossHaskellPkgs.callPackage ../../../nix/generated/th-microlens-consumer.nix {
-          mkDerivation = mkConsumerDerivationWithWorker "${workerWithMicrolens}/bin/th-host-worker";
+          mkDerivation =
+            mkConsumerDerivationWithWorker
+              "${workerWithMicrolens}/bin/th-host-worker"
+              [
+                "microlens"
+                "microlens-th"
+              ];
         };
     };
 in
