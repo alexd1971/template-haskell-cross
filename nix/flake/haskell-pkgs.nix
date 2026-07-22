@@ -35,12 +35,7 @@ let
           haskellLib = pkgs.haskell.lib;
         };
       th-consumer-example =
-        pkgs.callPackage ../th-consumer-example.nix {
-          callPackage = selfH.callPackage;
-          haskellLib = pkgs.haskell.lib;
-          th-cross-plugin = selfH.th-cross-plugin;
-          th-host-worker = hostHaskellPkgs.th-host-worker;
-        };
+        selfH.callPackage ../generated/th-consumer-example.nix { };
     };
   };
 

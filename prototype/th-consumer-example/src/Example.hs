@@ -2,5 +2,7 @@
 
 module Example where
 
+import Gen (gen)
+
 foo :: Int
-foo = $([| 42 |])
+foo = $(gen)

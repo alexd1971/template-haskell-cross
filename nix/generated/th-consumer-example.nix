@@ -1,6 +1,7 @@
 { mkDerivation
 , base
 , lib
+, template-haskell
 }:
 
 mkDerivation {
@@ -11,6 +12,7 @@ mkDerivation {
   isExecutable = false;
   libraryHaskellDepends = [
     base
+    template-haskell
   ];
   license = lib.licenses.bsd3;
 }

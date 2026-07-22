@@ -123,11 +123,9 @@ host architecture:
   `consumer-ghc9103-ghc` and passes the Nix-built GHC 9.8.4 worker path to the
   plugin.
 - `consumer-ghc9103-package` is a minimal Cabal package from
-  `consumerGhc9103HaskellPkgs`,
-  configured with `THCross.Plugin` plus the Nix-built GHC 9.8.4 worker path.
-  The Nix derivation injects those flags into the library component
-  `ghc-options` so Cabal's configure-time compiler sanity check does not try to
-  load the plugin before package dependencies are registered.
+  `consumerGhc9103HaskellPkgs` compiled natively with the standard GHC TH
+  evaluator. Package-level plugin/worker wiring is covered by the cross package
+  derivations below, where it is actually needed.
 - `aarch64-linux-cross-probe` records the plain nixpkgs
   `pkgsCross.aarch64-multiplatform` split without pretending that a real GHC
   9.8.4 target package set is available there.
@@ -164,9 +162,8 @@ of using `callCabal2nix` during flake evaluation. This avoids requiring
 
 Files under `nix/generated/` are generated from Cabal files and may be
 overwritten by `nix run .#regen-cabal-nix`. Files directly under `nix/` are
-manual wrappers that apply project-specific overrides, such as disabling tests,
-wrapping the worker with `TH_HOST_GHC_LIBDIR`, and injecting plugin options into
-the consumer example.
+manual wrappers that apply project-specific overrides, such as disabling tests
+and wrapping the worker with `TH_HOST_GHC_LIBDIR`.
 
 `th-cross-plugin` package test suites are disabled in the package derivation.
 The existing Cabal integration test expects the repository-level
@@ -563,8 +560,9 @@ find -L result -maxdepth 7 \( -type f -o -type l \) | sort
 Observed result: the generic builder invokes the patched
 `aarch64-unknown-linux-gnu-ghc-9.10.3`, loads `THCross.Plugin` through
 `-fplugin-library`, starts the GHC 9.8.4 host worker, expands the expression
-splice from `src/Example.hs`, and installs target package artifacts including
-the package conf, `.hi`, `.dyn_hi`, static library, and shared library.
+splice from `src/Example.hs`, where the splice calls a generator imported from
+`src/Gen.hs`, and installs target package artifacts including the package conf,
+`.hi`, `.dyn_hi`, static library, and shared library.
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
 
@@ -610,9 +608,9 @@ GHC 9.10.3 plugin package
   -> textual expression expansion
 ```
 
-The native package-level check additionally confirms that plugin options can be
-wired through a Cabal package derivation rather than only through a direct `ghc`
-invocation.
+The worker smoke checks confirm direct `ghc` invocation wiring. The
+package-level plugin path is covered by the cross Cabal/generic package builds
+below.
 
 The cross Cabal package derivation is the first package-shaped aarch64 build
 path in this flake. It copies `prototype/th-consumer-example`, creates a
@@ -620,24 +618,18 @@ standard `Setup.hs`, runs `Setup configure` with the patched aarch64 cross-GHC,
 then runs `Setup build` and `Setup copy`. The package output is installed under
 `$out`; the diagnostic log is written to `$out/nix-support/build-log`.
 
-Observed package-level output:
+Observed native package output:
 
 ```text
 th-consumer-example> Building library for th-consumer-example-0.1.0.0...
-th-consumer-example> [1 of 1] Compiling Example
-th-consumer-example> th-cross: intercepted Template Haskell splice
-th-consumer-example> module: Example
-th-consumer-example> kind: expression
-th-consumer-example> location: src/Example.hs:6:8-17
-th-consumer-example> expression: ([| 42 |])
-th-consumer-example> worker: /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
-th-consumer-example> th-cross: started worker /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
-th-consumer-example> th-host-worker: cache miss src/Example.hs
+th-consumer-example> [1 of 2] Compiling Gen
+th-consumer-example> [2 of 2] Compiling Example
 ```
 
-`th-consumer-example` disables library profiling in its Nix derivation so the
-check does not compile a separate profiling object variant and does not execute
-the same splice a second time only for `*.p_o` output.
+This native package build intentionally uses the standard GHC TH evaluator. The
+cross package derivations disable library profiling so the check does not
+compile a separate profiling object variant and does not execute the same
+splice a second time only for `*.p_o` output.
 
 Observed cross Cabal package output:
 
@@ -650,8 +642,8 @@ Building library for th-consumer-example-0.1.0.0...
 th-cross: intercepted Template Haskell splice
 module: Example
 kind: expression
-location: src/Example.hs:6:8-17
-expression: ([| 42 |])
+location: src/Example.hs:8:8-12
+expression: (gen)
 worker: /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
 th-cross: started worker /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
 th-host-worker: cache miss src/Example.hs
@@ -666,6 +658,8 @@ This confirms:
 - Cabal configures the library component with the patched aarch64 cross-GHC;
 - the cross-GHC loads `THCross.Plugin` through `-fplugin-library`;
 - the plugin delegates TH execution to the native GHC 9.8.4 worker;
+- the worker evaluates a splice whose generator is imported from the package's
+  separate `Gen` module;
 - Cabal installs the resulting target library output under the derivation
   output path;
 - Cabal receives target object output, unlike the earlier failed `-fno-code`
