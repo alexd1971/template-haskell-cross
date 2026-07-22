@@ -56,7 +56,10 @@ same-GHC-version helper for replaying annotation declarations produced by
   "spliceKey": "2bfc6d6f9f7d6abdfb5dbb5c8ab8d3d1",
   "spliceExpression": "genFoo 123",
   "crossGhcVersion": "9.8.4",
-  "hostPackages": ["microlens", "microlens-th"]
+  "hostPackageIds": [
+    "microlens-0.4.14.0-1VGRH8KhtCiFJuTK8ISqfF",
+    "microlens-th-0.4.3.17-GmrnQrlDn7K6e99RCCjC8F"
+  ]
 }
 ```
 
@@ -71,9 +74,9 @@ Fields:
   It is derived from module name, splice kind, and source span.
 - `spliceExpression`: pretty-printed splice expression.
 - `crossGhcVersion`: GHC version of the cross compiler process.
-- `hostPackages`: package names that the worker should expose in the native
-  GHC session while loading the source module. This is currently explicit
-  prototype configuration, not automatically derived Cabal context.
+- `hostPackageIds`: exact host-side unit ids that the worker should expose in
+  the native GHC session. This corresponds to GHC's `-package-id` and avoids
+  ambiguity between multiple package instances with the same package name.
 
 ## Successful Response
 

@@ -159,10 +159,11 @@ accidentally resolve to the consumer compiler package set.
 
 Experiments that evaluate TH generators from dependencies wrap the worker with
 an additional host-side package environment. In the current generic-builder
-prototype, the wrapper extracts package names from the generated derivation's
-component-specific `*HaskellDepends` fields, filters out boot packages such as
-`base` and `template-haskell`, and builds a GHC 9.8.4 `ghcWithPackages`
-environment for those names. For example,
+prototype, the wrapper reads concrete dependency derivations from the generated
+derivation's component-specific `*HaskellDepends` fields, extracts each
+dependency's Haskell `pname`, filters out boot packages such as `base` and
+`template-haskell`, and builds a GHC 9.8.4 `ghcWithPackages` environment for
+those names. For example,
 `consumer-ghc9103-cross-microlens-package` derives `microlens` and
 `microlens-th`, then passes the matching libdir to the worker wrapper:
 
@@ -170,24 +171,26 @@ environment for those names. For example,
 TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.8.4-with-packages/lib/ghc-9.8.4/lib
 ```
 
-The same derived names are passed as host package exposure through plugin
-options:
+The same derived names are resolved through the host GHC package DB with
+`ghc-pkg field <package> id --simple-output`, then passed as exact host package
+exposure through plugin options:
 
 ```text
--fplugin-opt=THCross.Plugin:host-package=microlens
--fplugin-opt=THCross.Plugin:host-package=microlens-th
+-fplugin-opt=THCross.Plugin:host-package-id=microlens-0.4.14.0-...
+-fplugin-opt=THCross.Plugin:host-package-id=microlens-th-0.4.3.17-...
 ```
 
-The plugin serializes these package names into the JSON-lines splice request as
-`hostPackages`. The worker turns them into host-side `-package` flags before
-loading the source module. `TH_HOST_GHC_PACKAGES` is still accepted as a local
-fallback, but the preferred prototype path is protocol-visible data from the
-cross-side plugin.
+The plugin serializes these unit ids into the JSON-lines splice request as
+`hostPackageIds`. The worker turns them into host-side `-package-id` flags
+before loading the source module. `TH_HOST_GHC_PACKAGE_IDS` is accepted as an
+environment-variable fallback for manual experiments, but the preferred
+prototype path is exact unit-id data from the cross-side plugin.
 
-This is still a prototype heuristic. It assumes the target dependency package
-name is also a valid attribute/package name in `pkgs.haskell.packages.ghc984`.
-That works for the current `microlens` smoke test but is not yet a complete
-Cabal component context model.
+This still assumes that each extracted package `pname` is available under the
+same attribute name in `pkgs.haskell.packages.ghc984`. Resolving the final GHC
+unit id through host `ghc-pkg` avoids ambiguity between multiple installed
+instances, but the surrounding package selection is not yet a complete Cabal
+component context model.
 
 The top-level `flake.nix` is intentionally only a thin entrypoint. The Nix
 flake implementation lives under `nix/flake/`:
@@ -665,13 +668,14 @@ output="Ada"
 status=ok
 ```
 
-Current blocker: host-side dependency context derivation is only heuristic. The
-Nix experiment derives package names from component `*HaskellDepends` fields,
-builds a matching GHC 9.8.4 host package DB, and passes matching `host-package`
+Current blocker: host-side dependency context derivation is still incomplete.
+The Nix experiment reads component `*HaskellDepends` derivations, extracts
+their Haskell `pname`, builds a matching GHC 9.8.4 host package DB, resolves
+exact host unit ids with host `ghc-pkg`, and passes matching `host-package-id`
 plugin options automatically. A production integration still needs a more exact
 component model for conditional dependencies, package flags, renamed packages,
-internal libraries, setup dependencies, and cases where the host package name
-differs from the target dependency name.
+internal libraries, setup dependencies, and packages whose host package-set
+attribute is not the same as the Cabal package name.
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
 

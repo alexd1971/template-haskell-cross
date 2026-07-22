@@ -36,7 +36,7 @@ import GHC.Driver.Hooks (Hooks (..))
 import GHC.Driver.Session
   ( GeneralFlag (Opt_ForceRecomp)
   , ModRenaming (ModRenaming)
-  , PackageArg (PackageArg)
+  , PackageArg (UnitIdArg)
   , PackageFlag (ExposePackage)
   , gopt_set
   , hiDir
@@ -76,6 +76,7 @@ import GHC.Types.SrcLoc
   , srcSpanStartLine
   )
 import GHC.Unit.Module (moduleName, moduleNameString)
+import GHC.Unit.Types (stringToUnit)
 import GHC.Utils.Outputable
   ( Outputable
   , SDoc
@@ -171,11 +172,11 @@ captureModuleSplices request = do
   dependentFilesRef <- newIORef []
   foreignFilesRef <- newIORef []
   ghcLibDir <- getGhcLibDir
-  extraPackages <- getHostGhcPackages request
+  extraPackageIds <- getHostGhcPackageIds request
   createDirectoryIfMissing True hostWorkerBuildDir
   result <- runGhc (Just ghcLibDir) $ do
     dflags <- getSessionDynFlags
-    setSessionDynFlags (workerDynFlags extraPackages dflags)
+    setSessionDynFlags (workerDynFlags extraPackageIds dflags)
     installCaptureHook capturesRef dependentFilesRef foreignFilesRef
     loadRequestedModule
   case result of
@@ -190,13 +191,15 @@ captureModuleSplices request = do
     sourceDir =
       takeDirectory (requestSourceFile request)
 
-    workerDynFlags extraPackages dflags =
+    workerDynFlags extraPackageIds dflags =
       (gopt_set dflags Opt_ForceRecomp)
         { importPaths = sourceDir : importPaths dflags
         , objectDir = Just hostWorkerBuildDir
         , hiDir = Just hostWorkerBuildDir
         , stubDir = Just hostWorkerBuildDir
-        , packageFlags = map exposeHostPackage extraPackages <> packageFlags dflags
+        , packageFlags =
+            map exposeHostPackageId extraPackageIds
+              <> packageFlags dflags
         }
 
     loadRequestedModule = do
@@ -239,23 +242,21 @@ getGhcLibDir = do
     Just libDir -> pure libDir
     Nothing -> trimTrailingNewline <$> readProcess "ghc" ["--print-libdir"] ""
 
--- | Package names to expose in the host-side GHC session.
+-- | Exact host-side unit ids to expose in the host-side GHC session.
 --
--- A bare GHC API session does not know the Cabal component package flags from
--- the cross build. The prototype receives the explicit package list from the
--- cross-side plugin request, with an environment-variable fallback for manual
--- experiments.
-getHostGhcPackages :: SpliceRequest -> IO [String]
-getHostGhcPackages request = do
-  explicitPackages <- lookupEnv "TH_HOST_GHC_PACKAGES"
-  pure (requestHostPackages request <> maybe [] words explicitPackages)
+-- Unit ids correspond to @-package-id@ and avoid ambiguity when several
+-- package instances with the same package name are present in a package DB.
+getHostGhcPackageIds :: SpliceRequest -> IO [String]
+getHostGhcPackageIds request = do
+  explicitPackageIds <- lookupEnv "TH_HOST_GHC_PACKAGE_IDS"
+  pure (requestHostPackageIds request <> maybe [] words explicitPackageIds)
 
--- | Convert a package name into the DynFlags representation of @-package name@.
-exposeHostPackage :: String -> PackageFlag
-exposeHostPackage packageName =
+-- | Convert a unit id into the DynFlags representation of @-package-id unit@.
+exposeHostPackageId :: String -> PackageFlag
+exposeHostPackageId unitId =
   ExposePackage
-    ("-package " <> packageName)
-    (PackageArg packageName)
+    ("-package-id " <> unitId)
+    (UnitIdArg (stringToUnit unitId))
     (ModRenaming True [])
 
 -- | Install a host-only hook that delegates to the previous hook/default GHC

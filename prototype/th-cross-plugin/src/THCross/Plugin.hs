@@ -187,9 +187,9 @@ loggingMetaHook workerState mode request spliceExpr = do
 
     evaluateWorkerSplice tcGblEnv parseFragment =
       case mode of
-        WorkerMode workerPath hostPackages -> do
+        WorkerMode workerPath hostPackageIds -> do
           spliceResult <-
-            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackages
+            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds
           replayDependentFiles (spliceResultDependentFiles spliceResult)
           replayForeignFiles (spliceResultForeignFiles spliceResult)
           replayAddedTopDecls (spliceResultAddedTopDecls spliceResult)
@@ -200,9 +200,9 @@ loggingMetaHook workerState mode request spliceExpr = do
 
     evaluateWorkerDeclarationSplice tcGblEnv =
       case mode of
-        WorkerMode workerPath hostPackages -> do
+        WorkerMode workerPath hostPackageIds -> do
           spliceResult <-
-            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackages
+            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds
           replayDependentFiles (spliceResultDependentFiles spliceResult)
           replayForeignFiles (spliceResultForeignFiles spliceResult)
           replayDiagnostics (spliceResultDiagnostics spliceResult)
@@ -228,9 +228,9 @@ loggingMetaHook workerState mode request spliceExpr = do
 
     evaluateWorkerAnnotationWrapper tcGblEnv =
       case mode of
-        WorkerMode workerPath hostPackages -> do
+        WorkerMode workerPath hostPackageIds -> do
           spliceResult <-
-            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackages
+            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds
           replayDependentFiles (spliceResultDependentFiles spliceResult)
           replayForeignFiles (spliceResultForeignFiles spliceResult)
           replayAddedTopDecls (spliceResultAddedTopDecls spliceResult)
@@ -277,12 +277,12 @@ data WorkerHandle = WorkerHandle
 -- @
 -- -fplugin-opt=THCross.Plugin:dummy-expr
 -- -fplugin-opt=THCross.Plugin:worker=/path/to/th-host-worker
--- -fplugin-opt=THCross.Plugin:host-package=package-name
+-- -fplugin-opt=THCross.Plugin:host-package-id=unit-id
 -- @
 pluginMode :: [CommandLineOption] -> PluginMode
 pluginMode opts
   | "dummy-expr" `elem` opts = DummyExprMode
-  | Just workerPath <- findWorkerPath opts = WorkerMode workerPath (findHostPackages opts)
+  | Just workerPath <- findWorkerPath opts = WorkerMode workerPath (findHostPackageIds opts)
   | otherwise = PassthroughMode
 
 -- | Extract the external worker executable path from plugin options.
@@ -293,11 +293,11 @@ pluginMode opts
 findWorkerPath :: [CommandLineOption] -> Maybe FilePath
 findWorkerPath = listToMaybe . mapMaybe (stripPrefix "worker=")
 
--- | Extract host-side packages that the worker should expose while loading the
--- source module with native GHC.
-findHostPackages :: [CommandLineOption] -> [String]
-findHostPackages =
-  mapMaybe (stripPrefix "host-package=")
+-- | Extract exact host-side unit ids that the worker should expose while
+-- loading the source module with native GHC.
+findHostPackageIds :: [CommandLineOption] -> [String]
+findHostPackageIds =
+  mapMaybe (stripPrefix "host-package-id=")
 
 -- | Human-readable splice kind used in prototype logging.
 metaRequestKind :: MetaRequest -> SpliceKind
@@ -322,7 +322,7 @@ mkSpliceRequest ::
   String ->
   [String] ->
   SpliceRequest
-mkSpliceRequest spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackages =
+mkSpliceRequest spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds =
   let (sourceFile, protocolSpan) = protocolSourceSpan sourceLoc
    in SpliceRequest
         { requestId = spliceModuleName <> ":" <> spliceKindToStr spliceKind <> ":" <> renderedSpan
@@ -333,7 +333,7 @@ mkSpliceRequest spliceModuleName spliceKind sourceLoc renderedSpan spliceKey ren
         , requestSpliceKey = spliceKey
         , requestSpliceExpression = renderedSpliceExpr
         , requestCrossGhcVersion = cProjectVersion
-        , requestHostPackages = hostPackages
+        , requestHostPackageIds = hostPackageIds
         }
 
 -- | Convert GHC's source span into protocol data.
@@ -372,9 +372,9 @@ requestWorker ::
   String ->
   [String] ->
   TcM SpliceResult
-requestWorker workerState workerPath spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackages = do
+requestWorker workerState workerPath spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds = do
   let workerRequest =
-        mkSpliceRequest spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackages
+        mkSpliceRequest spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds
   liftIO $ putStrLn ("worker: " <> workerPath)
   callWorker workerState workerPath workerRequest >>= \case
     Left err -> do

@@ -147,9 +147,9 @@ EOF
           componentDependencyFields;
 
       # The generated cabal2nix derivation passes concrete dependency
-      # derivations in component-specific `*HaskellDepends` fields. For this
-      # prototype, their Nix package names are also the names we expose in the
-      # host GHC session.
+      # derivations in component-specific `*HaskellDepends` fields. Use their
+      # Haskell package `pname`, not the full derivation name, as the key for
+      # the corresponding host package set.
       hostPackageNamesFor =
         args:
         pkgs.lib.unique
@@ -163,36 +163,42 @@ EOF
                 if dependency == null then
                   null
                 else
-                  pkgs.lib.getName dependency)
+                  dependency.pname)
               (componentHaskellDepends args)));
 
       # Real TH generators often live in dependencies. The worker evaluates
       # splices with native GHC 9.8.4, so give it a host-side package DB that
       # mirrors the target component dependencies by package name.
       mkWorkerWithHostPackages =
-        hostPackages:
-        if hostPackages == [ ] then
-          defaultWorker
+        hostPackageNames:
+        if hostPackageNames == [ ] then
+          {
+            worker = defaultWorker;
+            hostGhcPkg = "${pkgs.haskell.compiler.ghc984}/bin/ghc-pkg";
+          }
         else
           let
             hostGhcWithPackages =
               pkgs.haskell.packages.ghc984.ghcWithPackages
-                (hpkgs: map (packageName: hpkgs.${packageName}) hostPackages);
+                (hpkgs: map (packageName: hpkgs.${packageName}) hostPackageNames);
           in
-          "${pkgs.runCommand
-            "th-host-worker-ghc984-with-host-packages"
           {
-            nativeBuildInputs = [
-              pkgs.makeWrapper
-            ];
-          }
-          ''
-            mkdir -p "$out/bin"
-            makeWrapper \
-              ${hs.hostHaskellPkgs.th-host-worker}/bin/.th-host-worker-wrapped \
-              "$out/bin/th-host-worker" \
-              --set TH_HOST_GHC_LIBDIR "${hostGhcWithPackages}/lib/ghc-9.8.4/lib"
-          ''}/bin/th-host-worker";
+            worker = "${pkgs.runCommand
+              "th-host-worker-ghc984-with-host-packages"
+            {
+              nativeBuildInputs = [
+                pkgs.makeWrapper
+              ];
+            }
+            ''
+              mkdir -p "$out/bin"
+              makeWrapper \
+                ${hs.hostHaskellPkgs.th-host-worker}/bin/.th-host-worker-wrapped \
+                "$out/bin/th-host-worker" \
+                --set TH_HOST_GHC_LIBDIR "${hostGhcWithPackages}/lib/ghc-9.8.4/lib"
+            ''}/bin/th-host-worker";
+            hostGhcPkg = "${hostGhcWithPackages}/bin/ghc-pkg";
+          };
 
       # Build a target package set around the patched cross-GHC. The stock
       # nixpkgs aarch64 GHC 9.10.3 package set uses the unpatched compiler, so
@@ -213,8 +219,8 @@ EOF
       mkConsumerDerivationWithWorker =
         args:
         let
-          hostPackages = hostPackageNamesFor args;
-          worker = mkWorkerWithHostPackages hostPackages;
+          hostPackageNames = hostPackageNamesFor args;
+          workerContext = mkWorkerWithHostPackages hostPackageNames;
         in
         crossHaskellPkgs.mkDerivation
           (args // {
@@ -236,10 +242,11 @@ EOF
               appendToVar configureFlags "--ghc-option=-v0"
               appendToVar configureFlags "--ghc-option=-fno-external-interpreter"
               appendToVar configureFlags "--ghc-option=-fforce-recomp"
-              appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;[\"worker=${worker}\"]"
+              appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;[\"worker=${workerContext.worker}\"]"
               ${pkgs.lib.concatMapStringsSep "\n" (packageName: ''
-                appendToVar configureFlags "--ghc-option=-fplugin-opt=THCross.Plugin:host-package=${packageName}"
-              '') hostPackages}
+                host_package_id="$("${workerContext.hostGhcPkg}" field ${pkgs.lib.escapeShellArg packageName} id --simple-output)"
+                appendToVar configureFlags "--ghc-option=-fplugin-opt=THCross.Plugin:host-package-id=$host_package_id"
+              '') hostPackageNames}
             '';
           });
     in

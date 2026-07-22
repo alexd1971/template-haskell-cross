@@ -256,8 +256,8 @@ data SpliceRequest = SpliceRequest
     requestSpliceExpression :: !String
   , -- | Version of the cross-side compiler that produced this request.
     requestCrossGhcVersion :: !String
-  , -- | Host-side packages that must be exposed while loading this module.
-    requestHostPackages :: ![String]
+  , -- | Host-side unit ids that must be exposed while loading this module.
+    requestHostPackageIds :: ![String]
   }
   deriving (Eq, Show)
 
@@ -272,7 +272,7 @@ instance ToJSON SpliceRequest where
       , "spliceKey" .= requestSpliceKey request
       , "spliceExpression" .= requestSpliceExpression request
       , "crossGhcVersion" .= requestCrossGhcVersion request
-      , "hostPackages" .= requestHostPackages request
+      , "hostPackageIds" .= requestHostPackageIds request
       ]
 
 instance FromJSON SpliceRequest where
@@ -287,7 +287,7 @@ instance FromJSON SpliceRequest where
         <*> obj .: "spliceKey"
         <*> obj .: "spliceExpression"
         <*> obj .: "crossGhcVersion"
-        <*> obj .:? "hostPackages" .!= []
+        <*> obj .:? "hostPackageIds" .!= []
 
 -- | Response returned by the native host worker.
 data SpliceResponse
