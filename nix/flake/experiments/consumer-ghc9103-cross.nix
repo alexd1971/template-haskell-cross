@@ -15,7 +15,28 @@ let
     worker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
   };
 
-  cabalPackage =
+  # Read the native plugin package metadata in the same vocabulary GHC uses.
+  # `-fplugin-library` still wants a concrete shared object path, so derive it
+  # from `hs-libraries` plus the first `dynamic-library-dirs` entry.
+  pluginLibraryMetadataScript =
+    { pluginLibDir
+    , nativeGhcPkg
+    , consumerGhcVersion
+    }:
+    ''
+      plugin_pkg_db="${pluginLibDir}/lib/package.conf.d"
+      plugin_unit=$("${nativeGhcPkg}" --package-db="$plugin_pkg_db" field th-cross-plugin id --simple-output 2>/dev/null)
+      plugin_hs_library=$("${nativeGhcPkg}" --package-db="$plugin_pkg_db" field th-cross-plugin hs-libraries --simple-output 2>/dev/null)
+      plugin_dynamic_library_dirs=$("${nativeGhcPkg}" --package-db="$plugin_pkg_db" field th-cross-plugin dynamic-library-dirs --simple-output 2>/dev/null)
+      set -- $plugin_dynamic_library_dirs
+      plugin_so="$1/lib''${plugin_hs_library}-ghc${consumerGhcVersion}.so"
+      plugin_library_path=$(printf '%s\n' $plugin_dynamic_library_dirs | paste -sd:)
+    '';
+
+  # Control package-level build that drives Cabal directly through Setup.hs.
+  # This keeps a low-level, explicit baseline for comparing against nixpkgs'
+  # generic Haskell builder below.
+  manualSetupPackage =
     let
       crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
       crossTargetTriple = crossPkgs.stdenv.hostPlatform.config;
@@ -25,6 +46,7 @@ let
       crossBinutils = crossPkgs.buildPackages.bintools;
       consumerPlugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
       pluginLibDir = "${consumerPlugin}/lib/ghc-9.10.3";
+      nativeGhcPkg = "${pkgs.haskell.compiler.ghc9103}/bin/ghc-pkg";
       worker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
     in
     pkgs.runCommand
@@ -52,17 +74,10 @@ main :: IO ()
 main = defaultMain
 EOF
 
-        plugin_conf=$(find "${pluginLibDir}" -path '*/package.conf.d/th-cross-plugin-*.conf' | head -n 1)
-        plugin_so=$(find "${pluginLibDir}" -name 'libHSth-cross-plugin-*.so' | head -n 1)
-        plugin_unit=$(sed -n 's/^id:[[:space:]]*//p' "$plugin_conf")
-        plugin_library_path=$(
-          find \
-            "${pluginLibDir}" \
-            -name '*.so*' \
-            -printf '%h\n' \
-            | sort -u \
-            | paste -sd:
-        )
+        ${pluginLibraryMetadataScript {
+          inherit pluginLibDir nativeGhcPkg;
+          consumerGhcVersion = "9.10.3";
+        }}
 
         export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
@@ -72,7 +87,7 @@ EOF
           echo "crossGhcPkg=${crossGhcPkg}"
           echo "crossBinutils=${crossBinutils}"
           echo "worker=${worker}"
-          echo "pluginConf=$plugin_conf"
+          echo "pluginPkgDb=$plugin_pkg_db"
           echo "pluginSo=$plugin_so"
           echo "pluginUnit=$plugin_unit"
           echo
@@ -107,6 +122,62 @@ EOF
         echo >> "$report"
         echo "status=ok" >> "$report"
       '';
+
+  # Preferred package-level build shape: reuse nixpkgs' Haskell generic
+  # builder and inject only the cross-GHC/plugin-specific pieces.
+  genericBuilderPackage =
+    let
+      crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+      consumerPlugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
+      pluginLibDir = "${consumerPlugin}/lib/ghc-9.10.3";
+      nativeGhcPkg = "${pkgs.haskell.compiler.ghc9103}/bin/ghc-pkg";
+      worker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
+
+      # Build a target package set around the patched cross-GHC. The stock
+      # nixpkgs aarch64 GHC 9.10.3 package set uses the unpatched compiler, so
+      # reusing it directly would not exercise our current working cross path.
+      crossHaskellPkgs =
+        crossPkgs.callPackage (pkgs.path + "/pkgs/development/haskell-modules") {
+          haskellLib = pkgs.haskell.lib.compose;
+          buildHaskellPackages = pkgs.haskell.packages.ghc9103;
+          ghc = crossGhc9103Aarch64.forcedInternalInterpreter;
+          compilerConfig =
+            crossPkgs.callPackage
+              (pkgs.path + "/pkgs/development/haskell-modules/configuration-ghc-9.10.x.nix")
+              {
+                haskellLib = pkgs.haskell.lib.compose;
+              };
+        };
+
+      mkConsumerDerivation =
+        args:
+        crossHaskellPkgs.mkDerivation
+          (args // {
+            doCheck = false;
+            doHaddock = false;
+            doHoogle = false;
+            enableExternalInterpreter = false;
+            enableLibraryProfiling = false;
+            preConfigure = ''
+              ${pluginLibraryMetadataScript {
+                inherit pluginLibDir nativeGhcPkg;
+                consumerGhcVersion = "9.10.3";
+              }}
+              # The external plugin is loaded into the cross-GHC process by the
+              # host dynamic linker, so its transitive Haskell shared libraries must
+              # be discoverable at plugin load time.
+              export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+              appendToVar configureFlags "--ghc-option=-v0"
+              appendToVar configureFlags "--ghc-option=-fno-external-interpreter"
+              appendToVar configureFlags "--ghc-option=-fforce-recomp"
+              appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;[\"worker=${worker}\"]"
+            '';
+          });
+    in
+    crossHaskellPkgs.callPackage ../../../nix/generated/th-consumer-example.nix {
+      mkDerivation = mkConsumerDerivation;
+    };
 in
 {
   packages = {
@@ -146,7 +217,7 @@ in
           crossGhcDrv = crossGhc9103Aarch64.forcedInternalInterpreter;
         });
 
-    consumer-ghc9103-cross-cabal-package = cabalPackage;
-    consumer-ghc9103-cross-cabal-package-smoke = cabalPackage;
+    consumer-ghc9103-cross-cabal-package = manualSetupPackage;
+    consumer-ghc9103-cross-generic-package = genericBuilderPackage;
   };
 }

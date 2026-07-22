@@ -54,7 +54,7 @@ packages.${system}.consumer-ghc9103-cross-plugin-library-bootstrapped-probe
 packages.${system}.consumer-ghc9103-cross-plugin-library-forced-internal-interpreter-probe
 packages.${system}.consumer-ghc9103-cross-worker-smoke
 packages.${system}.consumer-ghc9103-cross-cabal-package
-packages.${system}.consumer-ghc9103-cross-cabal-package-smoke
+packages.${system}.consumer-ghc9103-cross-generic-package
 packages.${system}.consumer-ghc9103-cross-plugin-library-probe
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
@@ -107,8 +107,14 @@ host architecture:
   `th-consumer-example` package, runs Cabal's `Setup configure`, `Setup build`,
   and `Setup copy` with the forced aarch64 cross-GHC, and installs the package
   output under `$out`;
-- `consumer-ghc9103-cross-cabal-package-smoke` is currently an alias for
-  `consumer-ghc9103-cross-cabal-package`, kept for the earlier smoke-test name;
+- `consumer-ghc9103-cross-generic-package` builds the same checked-in
+  `th-consumer-example` package through nixpkgs' Haskell generic builder. It
+  constructs a target Haskell package set around the patched aarch64 cross-GHC,
+  uses native GHC 9.10.3 for `Setup.hs`, reads native plugin metadata with
+  `ghc-pkg`, passes `-fplugin-library` in `preConfigure`, and lets the generic
+  builder provide cross `ghc`, `ghc-pkg`, `gcc`, `ld`, `ar`, `strip`, package
+  DB, and install layout handling. This is the current preferred package-level
+  Nix shape;
 - `consumer-ghc9103-plugin` comes from `consumerGhc9103HaskellPkgs` and is
   built with GHC 9.10.3;
 - `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
@@ -546,6 +552,19 @@ Run the aarch64 cross-GHC Cabal package smoke:
 nix build .#consumer-ghc9103-cross-cabal-package
 cat result/nix-support/build-log
 ```
+
+Run the same package through nixpkgs' Haskell generic builder:
+
+```bash
+nix build .#consumer-ghc9103-cross-generic-package -L --allow-import-from-derivation
+find -L result -maxdepth 7 \( -type f -o -type l \) | sort
+```
+
+Observed result: the generic builder invokes the patched
+`aarch64-unknown-linux-gnu-ghc-9.10.3`, loads `THCross.Plugin` through
+`-fplugin-library`, starts the GHC 9.8.4 host worker, expands the expression
+splice from `src/Example.hs`, and installs target package artifacts including
+the package conf, `.hi`, `.dyn_hi`, static library, and shared library.
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
 

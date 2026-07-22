@@ -158,8 +158,8 @@ This early probe led to two branches:
   expose `-fplugin-library` and the normal `-fplugin` path blocks before
   `runMetaHook`;
 - GHC 9.10.3 plus a small patched cross-GHC derivation now provides the current
-  successful path for `-fplugin-library`, the host worker smoke, and the Cabal
-  package smoke.
+  successful path for `-fplugin-library`, the host worker smoke, the manual
+  Cabal package smoke, and a nixpkgs Haskell generic-builder package build.
 
 The current successful Nix path is documented in `docs/nix-integration.md`.
 
