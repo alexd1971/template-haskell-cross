@@ -422,9 +422,349 @@ nix build .#consumer-ghc9103-cross-plugin-library-probe -L
 cat result
 ```
 
-The next preferred path is therefore more specific: obtain or build a cross-GHC
-version that both exposes `-fplugin-library` and includes the internal
-interpreter support required by `loadExternalPlugins`.
+The next preferred path is therefore more specific: build a cross-GHC version
+that both exposes `-fplugin-library` and includes the internal interpreter
+support required by `loadExternalPlugins`. The flake contains a temporary
+experimental output for this:
+
+```bash
+nix build .#consumer-ghc9103-cross-ghc-bootstrapped -L
+nix build .#consumer-ghc9103-cross-plugin-library-bootstrapped-probe -L
+cat result
+```
+
+This variant overrides the GHC 9.10.3 cross compiler to bootstrap with native
+GHC 9.10.3 instead of the plain nixpkgs GHC 9.8.4 bootstrap. This confirms the
+same-version bootstrap shape:
+
+```text
+("Booter version","9.10.3")
+("Stage","1")
+("cross compiling","YES")
+```
+
+However, this is not sufficient for the tested nixpkgs GHC 9.10.3 cross
+derivation. The `-fplugin-library` probe still fails in
+`GHC.Driver.Plugins.loadExternalPlugins`:
+
+```text
+loadExternalPlugins: can't load external plugins with GHC built without internal interpreter
+```
+
+The source-level reason is visible in the GHC 9.10.3 source used by nixpkgs:
+
+```text
+compiler/GHC/Driver/Plugins.hs
+compiler/ghc.cabal.in
+ghc/ghc-bin.cabal.in
+hadrian/src/Settings/Packages.hs
+```
+
+`GHC.Driver.Plugins.loadExternalPlugins` is compiled in the `compiler` package.
+If `HAVE_INTERNAL_INTERPRETER` is not defined, the non-empty
+`-fplugin-library` path panics before attempting to load the plugin:
+
+```text
+loadExternalPlugins: can't load external plugins with GHC built without internal interpreter
+```
+
+The macro comes from the Cabal flag:
+
+```text
+compiler/ghc.cabal.in:
+  if flag(internal-interpreter)
+      CPP-Options: -DHAVE_INTERNAL_INTERPRETER
+```
+
+Hadrian also has an `internal-interpreter` flag path for `ghc-bin`. In the
+checked source, the automatic Hadrian condition for both `compiler` and
+`ghc-bin` is:
+
+```text
+ghcWithInterpreter && notStage0
+```
+
+The same-version bootstrap cross workaround found in `Settings/Packages.hs`
+applies to the `ghci` package:
+
+```text
+cross && bootCross -> -finternal-interpreter
+```
+
+That explains the observed result: rebuilding with native GHC 9.10.3 as the
+bootstrap compiler can satisfy the `ghci` workaround, but it does not by itself
+force `HAVE_INTERNAL_INTERPRETER` into the installed stage1 `compiler` package
+where `loadExternalPlugins` lives.
+
+The flake now exposes a second experiment that tries to force the relevant
+Hadrian/Cabal configuration:
+
+```bash
+nix build .#consumer-ghc9103-cross-plugin-library-forced-internal-interpreter-probe -L
+cat result
+```
+
+The first version of this experiment used Hadrian command-line settings
+conceptually equivalent to:
+
+```text
+stage1.ghc.cabal.configure.opts += --flags=internal-interpreter
+stage1.ghc-bin.cabal.configure.opts += --flags=internal-interpreter
+```
+
+The build log showed those settings were passed to Hadrian, but the installed
+cross-GHC still failed with the same `loadExternalPlugins` panic. The likely
+reason is that `cabal.configure.opts` contributes to Hadrian's `Cabal Setup`
+arguments, while Hadrian computes package flags separately through `Cabal
+Flags` and appends its own final `--flags=...` argument.
+
+The second version of this experiment patched `hadrian/src/Settings/Packages.hs`
+inside the GHC source tree. It changed the existing condition for the
+`internal-interpreter` Cabal flag from:
+
+```text
+ghcWithInterpreter && notStage0
+```
+
+to:
+
+```text
+(ghcWithInterpreter && notStage0) || stage1
+```
+
+That also did not affect the final compiler: nixpkgs invokes a prebuilt
+`hadrian` executable from `nativeBuildInputs`, so patching the Hadrian source
+copy inside the GHC source tree does not change the already-compiled Hadrian
+package rules.
+
+The third attempt used a supported Hadrian user setting to pass a GHC Haskell
+compile option directly to the stage1 Cabal package `ghc`:
+
+```text
+stage1.ghc.ghc.hs.opts += -DHAVE_INTERNAL_INTERPRETER
+```
+
+That setting also reached `hadrianFlags`, but the rebuilt compiler still failed
+with the same panic:
+
+```text
+stage1.ghc.ghc.hs.opts += -DHAVE_INTERNAL_INTERPRETER
+loadExternalPlugins: can't load external plugins with GHC built without internal interpreter
+```
+
+The likely reason is stage naming in cross mode: the installed stage1 cross
+compiler is built in Hadrian's stage0 context. An intermediate diagnostic patch
+then bypassed the exact source guard in `compiler/GHC/Driver/Plugins.hs`:
+
+```text
+#if !defined(HAVE_INTERNAL_INTERPRETER)
+```
+
+is patched to:
+
+```text
+#if 0
+```
+
+The first direct-guard patch proved the source patch was applied, but it opened
+implementation code whose imports and language extensions are guarded
+separately by:
+
+```text
+#if defined(HAVE_INTERNAL_INTERPRETER) && defined(CAN_LOAD_DLL)
+```
+
+Without that guard, compilation failed on `LambdaCase` and unboxed tuple syntax.
+The diagnostic patch therefore also changed those guards to:
+
+```text
+#if defined(CAN_LOAD_DLL)
+```
+
+That was useful, but it is not the minimized patch. The current minimized
+experiment no longer patches `GHC.Driver.Plugins`. Instead, it forces the
+intended `HAVE_INTERNAL_INTERPRETER` build macro by patching the Cabal
+configuration:
+
+```text
+compiler/ghc.cabal.in
+```
+
+from:
+
+```text
+if flag(internal-interpreter)
+    CPP-Options: -DHAVE_INTERNAL_INTERPRETER
+```
+
+to:
+
+```text
+CPP-Options: -DHAVE_INTERNAL_INTERPRETER
+```
+
+`CAN_LOAD_DLL` is not patched. It remains controlled by the
+`dynamic-system-linker` Cabal flag:
+
+```text
+if flag(dynamic-system-linker)
+    CPP-Options: -DCAN_LOAD_DLL
+```
+
+Observed result from the diagnostic patch, which the cabal-level patch is meant
+to preserve in a cleaner way: the rebuilt GHC gets past the preprocessor gates
+and reaches the real shared-library loader. The next failure was:
+
+```text
+loadExternalPluginLib
+Can't load plugin library
+  Library path: /nix/store/.../libHSth-cross-plugin-...-ghc9.10.3.so
+  Error       : /nix/store/...-ghc-9.10.3/.../libHSghc-prim-0.12.0-...-ghc9.10.3.so:
+                undefined symbol: stg_gc_unpt_r1
+```
+
+This is progress. It confirms that `-fplugin-library` can reach
+`GHCi.ObjLink.loadDLL` when the GHC source guard is bypassed and `CAN_LOAD_DLL`
+is available. It also shows a new blocker: the plugin shared library was built
+like a normal native GHC plugin and depends on native GHC package libraries/RTS
+symbols that the statically linked cross-GHC process does not export in the
+shape expected by the loader.
+
+ELF inspection showed:
+
+```text
+plugin .so:
+  undefined stg_gc_unpt_r1
+
+cross-GHC executable:
+  stg_gc_unpt_r1 exists in the normal symbol table
+  stg_gc_unpt_r1 is absent from the dynamic symbol table
+
+native RTS .so:
+  exports stg_gc_unpt_r1
+```
+
+The first export-dynamic attempt linked `stage1.ghc-bin` with exported dynamic
+symbols while keeping the diagnostic `GHC.Driver.Plugins` source patch:
+
+```text
+stage1.ghc-bin.ghc.link.opts += -optl-Wl,--export-dynamic
+```
+
+That did not change the resulting executable's dynamic symbol table. The reason
+is visible in Hadrian:
+
+```text
+hadrian/src/Rules/Program.hs
+```
+
+For cross builds, `buildProgram` copies `stage0/bin/<program>` to
+`stage1/bin/<program>` instead of linking the stage1 program directly. Therefore
+the relevant executable link option must be applied to `stage0.ghc-bin`:
+
+```text
+stage0.ghc-bin.ghc.link.opts += -optl-Wl,--export-dynamic
+```
+
+This mirrors the existing Hadrian rule for `iserv`, which adds the same linker
+option so dynamically loaded objects can refer to RTS symbols.
+
+Observed result after applying the linker option to `stage0.ghc-bin`:
+
+```text
+compile NoTH.hs with -fplugin-library:
+
+compileExit=0
+status=ok
+```
+
+This confirms that the patched cross-GHC can load the plugin shared library via
+`-fplugin-library`. The flake also exposes the next smoke test, which compiles
+`Example.hs` through `THCross.Plugin` and the GHC 9.8.4 host worker:
+
+```bash
+nix build .#consumer-ghc9103-cross-worker-smoke -L
+cat result
+```
+
+The first worker-smoke run reached the hook and the host worker but failed
+afterwards:
+
+```text
+th-cross: intercepted Template Haskell splice
+th-cross: started worker /nix/store/.../bin/th-host-worker
+th-host-worker: cache miss /nix/store/...-Example.hs
+<no location info>: error:
+    Template haskell requires a target code interpreter
+
+compileExit=1
+status=blocked
+```
+
+The error is not from `tcTopSpliceExpr`; that function only typechecks the
+splice expression and does not call `tcGetInterp`. The relevant path is the
+empty module-finalizer path for an already expanded untyped splice:
+
+```text
+GHC.Rename.Splice.rnUntypedSpliceExpr
+GHC.Tc.Gen.Splice.getUntypedSpliceBody
+GHC.Tc.Utils.Monad.addModFinalizersWithLclEnv
+GHC.Tc.Module.run_th_modfinalizers
+GHC.Tc.Gen.Splice.runRemoteModFinalizers
+GHC.Tc.Gen.Splice.tcGetInterp
+```
+
+`addModFinalizersWithLclEnv` stores `ThModFinalizers []` unconditionally. Later,
+`runRemoteModFinalizers (ThModFinalizers [])` calls `tcGetInterp` before it
+checks whether there is any work to do. For this prototype, the forced cross-GHC
+experiment now also patches the empty case:
+
+```haskell
+addModFinalizersWithLclEnv (ThModFinalizers []) = pure ()
+addModFinalizersWithLclEnv mod_finalizers = ...
+```
+
+Observed result after replacing the direct `GHC.Driver.Plugins` guard patch with
+the cabal-level `HAVE_INTERNAL_INTERPRETER` patch and adding the empty-finalizer
+patch:
+
+```text
+compile Example.hs with -fplugin-library and host worker:
+th-cross: intercepted Template Haskell splice
+module: Example
+kind: expression
+worker: /nix/store/.../bin/th-host-worker
+th-cross: started worker /nix/store/.../bin/th-host-worker
+th-host-worker: cache miss /nix/store/...-Example.hs
+
+compileExit=0
+status=ok
+```
+
+The current minimal successful GHC-side patch set for this experiment is:
+
+```text
+nix/patches/ghc-9.10.3-force-compiler-internal-interpreter.patch:
+  make CPP-Options: -DHAVE_INTERNAL_INTERPRETER unconditional for the compiler
+  package used by the running cross-GHC.
+
+hadrian flags:
+  stage0.ghc-bin.ghc.link.opts += -optl-Wl,--export-dynamic
+
+nix/patches/ghc-9.10.3-ignore-empty-th-finalizers.patch:
+  ignore addModFinalizersWithLclEnv (ThModFinalizers []).
+```
+
+The next step is to turn the experiment into the smallest documented GHC patch
+set. Remaining fallback options, if later cases require more than the current
+minimal patch set, are more invasive:
+
+```text
+force the relevant internal-interpreter Cabal flag/CPP path in the GHC build;
+or patch loadExternalPlugins / plugin loading directly;
+or link the THCross hook into a custom GHC executable instead of loading it as
+an external plugin.
+```
 
 ### Internal Static Plugin Or Patched GHC Main
 

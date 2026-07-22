@@ -1,0 +1,12 @@
+--- a/compiler/ghc.cabal.in
++++ b/compiler/ghc.cabal.in
+@@ -135,8 +135,7 @@
+                  -Wnoncanonical-monad-instances
+                  -Wnoncanonical-monoid-instances
+ 
+-    if flag(internal-interpreter)
+-        CPP-Options: -DHAVE_INTERNAL_INTERPRETER
++    CPP-Options: -DHAVE_INTERNAL_INTERPRETER
+ 
+     -- if no dynamic system linker is available, don't try DLLs.
+     if flag(dynamic-system-linker)

@@ -1,0 +1,13 @@
+--- a/compiler/GHC/Tc/Utils/Monad.hs
++++ b/compiler/GHC/Tc/Utils/Monad.hs
+@@ -2091,8 +2091,10 @@ setStage s = updLclEnv (setLclEnvThStage s)
+ -- | Adds the given modFinalizers to the global environment and set them to use
+ -- the current local environment.
+ addModFinalizersWithLclEnv :: ThModFinalizers -> TcM ()
++addModFinalizersWithLclEnv (ThModFinalizers [])
++  = pure ()
+ addModFinalizersWithLclEnv mod_finalizers
+   = do lcl_env <- getLclEnv
+        th_modfinalizers_var <- fmap tcg_th_modfinalizers getGblEnv
+        updTcRef th_modfinalizers_var $ \fins ->
+          (lcl_env, mod_finalizers) : fins
