@@ -258,6 +258,31 @@ EOF
         crossHaskellPkgs.callPackage ../../../nix/generated/th-executable-consumer.nix {
           mkDerivation = mkConsumerDerivationWithWorker;
         };
+
+      executableConsumerQemuSmoke =
+        pkgs.runCommand
+          "th-cross-consumer-ghc9103-cross-executable-qemu-smoke"
+          {
+            nativeBuildInputs = [
+              pkgs.qemu-user
+            ];
+          }
+          ''
+            output="$(${pkgs.qemu-user}/bin/qemu-aarch64 ${genericBuilderPackages.executableConsumer}/bin/th-executable-consumer)"
+
+            if [ "$output" != '"Ada"' ]; then
+              echo "expected: \"Ada\"" >&2
+              echo "actual:   $output" >&2
+              exit 1
+            fi
+
+            {
+              echo "executable=${genericBuilderPackages.executableConsumer}/bin/th-executable-consumer"
+              echo "qemu=${pkgs.qemu-user}/bin/qemu-aarch64"
+              echo "output=$output"
+              echo "status=ok"
+            } > "$out"
+          '';
     };
 in
 {
@@ -302,5 +327,6 @@ in
     consumer-ghc9103-cross-generic-package = genericBuilderPackages.example;
     consumer-ghc9103-cross-microlens-package = genericBuilderPackages.microlensConsumer;
     consumer-ghc9103-cross-executable-package = genericBuilderPackages.executableConsumer;
+    consumer-ghc9103-cross-executable-qemu-smoke = genericBuilderPackages.executableConsumerQemuSmoke;
   };
 }

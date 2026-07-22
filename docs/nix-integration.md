@@ -57,6 +57,7 @@ packages.${system}.consumer-ghc9103-cross-cabal-package
 packages.${system}.consumer-ghc9103-cross-generic-package
 packages.${system}.consumer-ghc9103-cross-microlens-package
 packages.${system}.consumer-ghc9103-cross-executable-package
+packages.${system}.consumer-ghc9103-cross-executable-qemu-smoke
 packages.${system}.consumer-ghc9103-cross-plugin-library-probe
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
@@ -126,6 +127,9 @@ host architecture:
   `th-executable-consumer`, an executable-only package with the same
   `microlens-th` declaration splice. This checks that host package discovery is
   not limited to library components;
+- `consumer-ghc9103-cross-executable-qemu-smoke` runs the aarch64 executable
+  from `consumer-ghc9103-cross-executable-package` under `qemu-aarch64` and
+  checks that it prints `"Ada"`;
 - `consumer-ghc9103-plugin` comes from `consumerGhc9103HaskellPkgs` and is
   built with GHC 9.10.3;
 - `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
@@ -646,6 +650,20 @@ find -L result -maxdepth 8 \( -name 'th-executable-consumer' -o -name '*.conf' \
 Observed result: the package builds an aarch64 executable component and the same
 automatic host-package mechanism derives package names from
 `executableHaskellDepends`, not `libraryHaskellDepends`.
+
+Run the resulting aarch64 executable under qemu:
+
+```bash
+nix build .#consumer-ghc9103-cross-executable-qemu-smoke -L --allow-import-from-derivation
+cat result
+```
+
+Expected report:
+
+```text
+output="Ada"
+status=ok
+```
 
 Current blocker: host-side dependency context derivation is only heuristic. The
 Nix experiment derives package names from component `*HaskellDepends` fields,
