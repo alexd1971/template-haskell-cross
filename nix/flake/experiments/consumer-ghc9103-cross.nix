@@ -125,13 +125,39 @@ EOF
 
   # Preferred package-level build shape: reuse nixpkgs' Haskell generic
   # builder and inject only the cross-GHC/plugin-specific pieces.
-  genericBuilderPackage =
+  genericBuilderPackages =
     let
       crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
       consumerPlugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
       pluginLibDir = "${consumerPlugin}/lib/ghc-9.10.3";
       nativeGhcPkg = "${pkgs.haskell.compiler.ghc9103}/bin/ghc-pkg";
-      worker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
+      defaultWorker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
+
+      # Real TH generators often live in dependencies. The host worker evaluates
+      # the splice with native GHC 9.8.4, so it needs a host-side package
+      # database containing those generator dependencies, not only target
+      # packages from the cross build.
+      hostGhcWithMicrolens =
+        pkgs.haskell.packages.ghc984.ghcWithPackages (hpkgs: [
+          hpkgs.microlens-th
+        ]);
+
+      workerWithMicrolens =
+        pkgs.runCommand
+          "th-host-worker-ghc984-with-microlens"
+          {
+            nativeBuildInputs = [
+              pkgs.makeWrapper
+            ];
+          }
+          ''
+            mkdir -p "$out/bin"
+            makeWrapper \
+              ${hs.hostHaskellPkgs.th-host-worker}/bin/.th-host-worker-wrapped \
+              "$out/bin/th-host-worker" \
+              --set TH_HOST_GHC_LIBDIR "${hostGhcWithMicrolens}/lib/ghc-9.8.4/lib" \
+              --set TH_HOST_GHC_PACKAGES "microlens microlens-th"
+          '';
 
       # Build a target package set around the patched cross-GHC. The stock
       # nixpkgs aarch64 GHC 9.10.3 package set uses the unpatched compiler, so
@@ -149,7 +175,8 @@ EOF
               };
         };
 
-      mkConsumerDerivation =
+      mkConsumerDerivationWithWorker =
+        worker:
         args:
         crossHaskellPkgs.mkDerivation
           (args // {
@@ -175,8 +202,16 @@ EOF
             '';
           });
     in
-    crossHaskellPkgs.callPackage ../../../nix/generated/th-consumer-example.nix {
-      mkDerivation = mkConsumerDerivation;
+    {
+      example =
+        crossHaskellPkgs.callPackage ../../../nix/generated/th-consumer-example.nix {
+          mkDerivation = mkConsumerDerivationWithWorker defaultWorker;
+        };
+
+      microlensConsumer =
+        crossHaskellPkgs.callPackage ../../../nix/generated/th-microlens-consumer.nix {
+          mkDerivation = mkConsumerDerivationWithWorker "${workerWithMicrolens}/bin/th-host-worker";
+        };
     };
 in
 {
@@ -218,6 +253,7 @@ in
         });
 
     consumer-ghc9103-cross-cabal-package = manualSetupPackage;
-    consumer-ghc9103-cross-generic-package = genericBuilderPackage;
+    consumer-ghc9103-cross-generic-package = genericBuilderPackages.example;
+    consumer-ghc9103-cross-microlens-package = genericBuilderPackages.microlensConsumer;
   };
 }

@@ -35,10 +35,14 @@ import GHC.Driver.Env.Types (HscEnv (..))
 import GHC.Driver.Hooks (Hooks (..))
 import GHC.Driver.Session
   ( GeneralFlag (Opt_ForceRecomp)
+  , ModRenaming (ModRenaming)
+  , PackageArg (PackageArg)
+  , PackageFlag (ExposePackage)
   , gopt_set
   , hiDir
   , importPaths
   , objectDir
+  , packageFlags
   , stubDir
   )
 import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr)
@@ -167,10 +171,11 @@ captureModuleSplices request = do
   dependentFilesRef <- newIORef []
   foreignFilesRef <- newIORef []
   ghcLibDir <- getGhcLibDir
+  extraPackages <- getHostGhcPackages
   createDirectoryIfMissing True hostWorkerBuildDir
   result <- runGhc (Just ghcLibDir) $ do
     dflags <- getSessionDynFlags
-    setSessionDynFlags (workerDynFlags dflags)
+    setSessionDynFlags (workerDynFlags extraPackages dflags)
     installCaptureHook capturesRef dependentFilesRef foreignFilesRef
     loadRequestedModule
   case result of
@@ -185,12 +190,13 @@ captureModuleSplices request = do
     sourceDir =
       takeDirectory (requestSourceFile request)
 
-    workerDynFlags dflags =
+    workerDynFlags extraPackages dflags =
       (gopt_set dflags Opt_ForceRecomp)
         { importPaths = sourceDir : importPaths dflags
         , objectDir = Just hostWorkerBuildDir
         , hiDir = Just hostWorkerBuildDir
         , stubDir = Just hostWorkerBuildDir
+        , packageFlags = map exposeHostPackage extraPackages <> packageFlags dflags
         }
 
     loadRequestedModule = do
@@ -232,6 +238,24 @@ getGhcLibDir = do
   case explicitLibDir of
     Just libDir -> pure libDir
     Nothing -> trimTrailingNewline <$> readProcess "ghc" ["--print-libdir"] ""
+
+-- | Package names to expose in the host-side GHC session.
+--
+-- A bare GHC API session does not know the Cabal component package flags from
+-- the cross build. The first Nix prototype passes the host-buildable generator
+-- dependencies explicitly through this environment variable.
+getHostGhcPackages :: IO [String]
+getHostGhcPackages = do
+  explicitPackages <- lookupEnv "TH_HOST_GHC_PACKAGES"
+  pure (maybe [] words explicitPackages)
+
+-- | Convert a package name into the DynFlags representation of @-package name@.
+exposeHostPackage :: String -> PackageFlag
+exposeHostPackage packageName =
+  ExposePackage
+    ("-package " <> packageName)
+    (PackageArg packageName)
+    (ModRenaming True [])
 
 -- | Install a host-only hook that delegates to the previous hook/default GHC
 -- evaluator, records the generated splice, and returns it unchanged.
