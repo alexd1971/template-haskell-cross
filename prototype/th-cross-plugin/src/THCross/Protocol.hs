@@ -258,6 +258,8 @@ data SpliceRequest = SpliceRequest
     requestCrossGhcVersion :: !String
   , -- | Host-side unit ids that must be exposed while loading this module.
     requestHostPackageIds :: ![String]
+  , -- | Extra source directories visible to host GHC while loading this module.
+    requestHostSourceDirs :: ![FilePath]
   }
   deriving (Eq, Show)
 
@@ -273,6 +275,7 @@ instance ToJSON SpliceRequest where
       , "spliceExpression" .= requestSpliceExpression request
       , "crossGhcVersion" .= requestCrossGhcVersion request
       , "hostPackageIds" .= requestHostPackageIds request
+      , "hostSourceDirs" .= requestHostSourceDirs request
       ]
 
 instance FromJSON SpliceRequest where
@@ -288,6 +291,7 @@ instance FromJSON SpliceRequest where
         <*> obj .: "spliceExpression"
         <*> obj .: "crossGhcVersion"
         <*> obj .:? "hostPackageIds" .!= []
+        <*> obj .:? "hostSourceDirs" .!= []
 
 -- | Response returned by the native host worker.
 data SpliceResponse

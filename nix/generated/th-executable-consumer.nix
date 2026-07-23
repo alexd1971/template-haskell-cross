@@ -3,18 +3,23 @@
 , lib
 , microlens
 , microlens-th
+, template-haskell
 }:
 
 mkDerivation {
   pname = "th-executable-consumer";
   version = "0.1.0.0";
   src = ../../prototype/th-executable-consumer;
-  isLibrary = false;
+  isLibrary = true;
   isExecutable = true;
+  libraryHaskellDepends = [
+    base
+    microlens-th
+    template-haskell
+  ];
   executableHaskellDepends = [
     base
     microlens
-    microlens-th
   ];
   license = lib.licenses.bsd3;
 }

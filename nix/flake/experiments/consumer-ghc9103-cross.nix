@@ -217,6 +217,7 @@ EOF
 
       cabalContextValidationScript =
         expectedHostPackageNames:
+        excludedPackageNames:
         ''
           cat > dump-cabal-component-deps.hs <<'EOF'
 import Distribution.Simple.Configure (getPersistBuildConfig)
@@ -261,8 +262,14 @@ EOF
 ${pkgs.lib.concatStringsSep "\n" expectedHostPackageNames}
 EOF
 
+          cat > "$out/nix-support/excluded-host-package-names" <<'EOF'
+base
+template-haskell
+${pkgs.lib.concatStringsSep "\n" excludedPackageNames}
+EOF
+
           awk '/^  / { print $1 }' "$out/nix-support/cabal-component-deps" \
-            | grep -v -E '^(base|template-haskell)$' \
+            | grep -F -x -v -f "$out/nix-support/excluded-host-package-names" \
             | sort -u \
             > "$out/nix-support/cabal-derived-package-names"
 
@@ -279,11 +286,31 @@ EOF
           fi
         '';
 
+      appendCabalSourceDirsToPluginOptions =
+        ''
+          ${pkgs.haskell.compiler.ghc9103}/bin/ghc \
+            -v0 \
+            -package Cabal \
+            --make ${../../../nix/tools/dump-cabal-source-dirs.hs} \
+            -o dump-cabal-source-dirs
+
+          ./dump-cabal-source-dirs \
+            > th-cross-cabal-source-dirs
+
+          while IFS= read -r source_dir; do
+            if [ -n "$source_dir" ]; then
+              plugin_options="$plugin_options,\"host-source-dir=$PWD/$source_dir\""
+            fi
+          done < th-cross-cabal-source-dirs
+        '';
+
       mkConsumerDerivationWithWorker =
         hostPackageNames:
         args:
         let
-          workerContext = mkWorkerWithHostPackages hostPackageNames;
+          externalHostPackageNames =
+            builtins.filter (packageName: packageName != args.pname) hostPackageNames;
+          workerContext = mkWorkerWithHostPackages externalHostPackageNames;
         in
         crossHaskellPkgs.mkDerivation
           (args // {
@@ -303,19 +330,23 @@ EOF
               # be discoverable at plugin load time.
               export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+              plugin_options="[\"worker=${workerContext.worker}\""
+              ${pkgs.lib.concatMapStringsSep "\n" (packageName: ''
+                host_package_id="$("${workerContext.hostGhcPkg}" field ${pkgs.lib.escapeShellArg packageName} id --simple-output)"
+                plugin_options="$plugin_options,\"host-package-id=$host_package_id\""
+              '') externalHostPackageNames}
+              ${appendCabalSourceDirsToPluginOptions}
+              plugin_options="$plugin_options]"
+
               appendToVar configureFlags "--ghc-option=-v0"
               appendToVar configureFlags "--ghc-option=-fno-external-interpreter"
               appendToVar configureFlags "--ghc-option=-fforce-recomp"
-              appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;[\"worker=${workerContext.worker}\"]"
-              ${pkgs.lib.concatMapStringsSep "\n" (packageName: ''
-                host_package_id="$("${workerContext.hostGhcPkg}" field ${pkgs.lib.escapeShellArg packageName} id --simple-output)"
-                appendToVar configureFlags "--ghc-option=-fplugin-opt=THCross.Plugin:host-package-id=$host_package_id"
-              '') hostPackageNames}
+              appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;$plugin_options"
             '';
             postConfigure =
               pkgs.lib.concatStringsSep "\n" [
                 (args.postConfigure or "")
-                (cabalContextValidationScript hostPackageNames)
+                (cabalContextValidationScript externalHostPackageNames [ args.pname ])
               ];
           });
 
@@ -331,7 +362,7 @@ EOF
             postConfigure =
               pkgs.lib.concatStringsSep "\n" [
                 (args.postConfigure or "")
-                (cabalContextValidationScript expectedHostPackageNames)
+                (cabalContextValidationScript expectedHostPackageNames [ args.pname ])
               ];
           });
 
@@ -349,7 +380,10 @@ EOF
         packageFile:
         let
           basePackage = crossHaskellPkgs.callPackage packageFile { };
-          expectedHostPackageNames = hostPackageNamesFromCabalDeps basePackage.getCabalDeps;
+          expectedHostPackageNames =
+            builtins.filter
+              (packageName: packageName != basePackage.pname)
+              (hostPackageNamesFromCabalDeps basePackage.getCabalDeps);
         in
         crossHaskellPkgs.callPackage packageFile {
           mkDerivation = mkCabalContextProbe expectedHostPackageNames;

@@ -59,6 +59,9 @@ same-GHC-version helper for replaying annotation declarations produced by
   "hostPackageIds": [
     "microlens-0.4.14.0-1VGRH8KhtCiFJuTK8ISqfF",
     "microlens-th-0.4.3.17-GmrnQrlDn7K6e99RCCjC8F"
+  ],
+  "hostSourceDirs": [
+    "src"
   ]
 }
 ```
@@ -77,6 +80,10 @@ Fields:
 - `hostPackageIds`: exact host-side unit ids that the worker should expose in
   the native GHC session. This corresponds to GHC's `-package-id` and avoids
   ambiguity between multiple package instances with the same package name.
+- `hostSourceDirs`: extra source directories that the worker should add to the
+  native GHC session's import path. This is needed when the splice module imports
+  another source module from the same package, for example an executable module
+  importing its package's library component.
 
 ## Successful Response
 

@@ -125,9 +125,11 @@ host architecture:
   `makeLenses ''User` through the GHC 9.8.4 host worker while cross-compiling
   the package with the patched aarch64 GHC 9.10.3;
 - `consumer-ghc9103-cross-executable-package` builds
-  `th-executable-consumer`, an executable-only package with the same
-  `microlens-th` declaration splice. This checks that host package discovery is
-  not limited to library components;
+  `th-executable-consumer`, a package with a library component and an
+  executable component. The executable imports a TH generator from its own
+  library and runs a declaration splice in `app/Main.hs`. This checks both
+  executable-component dependency discovery and host-side visibility of source
+  modules from the same package;
 - `consumer-ghc9103-cross-executable-qemu-smoke` runs the aarch64 executable
   from `consumer-ghc9103-cross-executable-package` under `qemu-aarch64` and
   checks that it prints `"Ada"`;
@@ -702,9 +704,30 @@ nix build .#consumer-ghc9103-cross-executable-package -L --allow-import-from-der
 find -L result -maxdepth 8 \( -name 'th-executable-consumer' -o -name '*.conf' \) -print
 ```
 
-Observed result: the package builds an aarch64 executable component and the same
-automatic host-package mechanism derives package names from
-`executableHaskellDepends`, not `libraryHaskellDepends`.
+Observed result: the package builds an aarch64 executable component. The worker
+receives the source directory of the current splice file plus every
+`hs-source-dirs` entry parsed from the package `.cabal` file during
+`preConfigure`, for example:
+
+```text
+th-host-worker: import paths ["app","/build/th-executable-consumer/src","/build/th-executable-consumer/app"]
+```
+
+The executable splice imports `ExecutableConsumer.Gen` from the same package
+library and evaluates the generator through the host worker. The automatic host
+package mechanism also derives external package names from both library and
+executable component dependencies while filtering the package's own internal
+library dependency out of the external host package set.
+
+The source-directory data is deliberately derived from Cabal syntax instead of
+hardcoded Nix metadata. The generic-builder wrapper compiles
+`nix/tools/dump-cabal-source-dirs.hs` with the native Cabal library, runs it in
+the unpacked package directory, extracts `hs-source-dirs` from library,
+executable, test, and benchmark components, and embeds each directory into the
+fourth field of `-fplugin-library` as `host-source-dir=...`. Separate
+`-fplugin-opt=THCross.Plugin:...` arguments are not used on this path, because
+external plugins loaded through `-fplugin-library` receive the option list from
+the `-fplugin-library` argument.
 
 Run the resulting aarch64 executable under qemu:
 
@@ -720,15 +743,15 @@ output="Ada"
 status=ok
 ```
 
-Current blocker: host-side dependency context derivation is improved but still
-incomplete. The Nix experiment reads nixpkgs Haskell derivation
+Current blocker: host-side dependency context derivation is validated against
+Cabal `setup-config`, but package selection is still not a complete Cabal
+component-context model. The Nix experiment reads nixpkgs Haskell derivation
 `passthru.getCabalDeps`, extracts dependency `pname`s, builds a matching GHC
 9.8.4 host package DB, resolves exact host unit ids with host `ghc-pkg`, and
-passes matching `host-package-id` plugin options automatically. It also validates
-the selected package names against Cabal `setup-config` after configuration. A
-production integration still needs a model for renamed packages, internal
-libraries, setup dependencies, and packages whose host package-set attribute is
-not the same as the Cabal package name.
+passes matching `host-package-id` plugin options automatically. A production
+integration still needs a model for renamed packages, internal libraries beyond
+the current package, setup dependencies, and packages whose host package-set
+attribute is not the same as the Cabal package name.
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
 

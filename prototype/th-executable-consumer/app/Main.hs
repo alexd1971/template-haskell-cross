@@ -2,14 +2,14 @@
 
 module Main where
 
+import ExecutableConsumer.Gen (makeUserLenses)
 import Lens.Micro (Lens', (^.))
-import Lens.Micro.TH (makeLenses)
 
 data User = User
   { _userName :: String
   }
 
-makeLenses ''User
+makeUserLenses ''User
 
 main :: IO ()
 main =

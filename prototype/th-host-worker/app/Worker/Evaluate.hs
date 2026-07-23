@@ -144,10 +144,10 @@ handleEvalException =
 -- produced by GHC's normal Template Haskell evaluator.
 --
 -- This is the host-side equivalent of normal module compilation. The worker
--- creates a native GHC session, adds the source directory to the import path,
--- installs a capture hook, sets the requested source file as the target, and
--- calls 'load'. During 'load', GHC performs normal declaration-group ordering and
--- invokes the hook for each splice it encounters.
+-- creates a native GHC session, adds the Cabal-derived source directories to
+-- the import path, installs a capture hook, sets the requested source file as
+-- the target, and calls 'load'. During 'load', GHC performs normal
+-- declaration-group ordering and invokes the hook for each splice it encounters.
 evaluateModuleSpliceResult :: EvaluationCache -> SpliceRequest -> IO (Either String SpliceResult)
 evaluateModuleSpliceResult cache request = do
   cached <- selectCapturedSplice request <$> readIORef cache
@@ -173,6 +173,7 @@ captureModuleSplices request = do
   foreignFilesRef <- newIORef []
   ghcLibDir <- getGhcLibDir
   extraPackageIds <- getHostGhcPackageIds request
+  hPutStrLn stderr ("th-host-worker: import paths " <> show workerImportPaths)
   createDirectoryIfMissing True hostWorkerBuildDir
   result <- runGhc (Just ghcLibDir) $ do
     dflags <- getSessionDynFlags
@@ -191,9 +192,14 @@ captureModuleSplices request = do
     sourceDir =
       takeDirectory (requestSourceFile request)
 
+    workerImportPaths =
+      case requestHostSourceDirs request of
+        [] -> [sourceDir]
+        hostSourceDirs -> hostSourceDirs
+
     workerDynFlags extraPackageIds dflags =
       (gopt_set dflags Opt_ForceRecomp)
-        { importPaths = sourceDir : importPaths dflags
+        { importPaths = workerImportPaths <> importPaths dflags
         , objectDir = Just hostWorkerBuildDir
         , hiDir = Just hostWorkerBuildDir
         , stubDir = Just hostWorkerBuildDir
