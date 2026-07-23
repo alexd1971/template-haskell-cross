@@ -24,7 +24,7 @@ The cross-side plugin sends the worker:
 It does not send:
 
 - the full cross-side `DynFlags`;
-- automatically extracted CPP options;
+- automatically extracted CPP options in the plugin itself;
 - automatically extracted package flags;
 - package database configuration;
 - full Cabal component context;
@@ -66,7 +66,10 @@ target-like preprocessing flags:
 ```
 
 So the worker can reproduce selected cross compiler options, but only when the
-build integration passes them explicitly.
+build integration passes them explicitly. The current Nix generic-builder
+prototype derives unconditional Cabal `cpp-options` and passes each one as
+`host-ghc-option=...`; the plugin does not infer those options from cross
+`DynFlags` by itself.
 
 ## Relevant GHC 9.8.4 Fields
 
@@ -241,14 +244,14 @@ If these are not true, the prototype may generate incorrect code.
    Cabal component id
    source hash
    ```
-2. Derive explicit host GHC options from the consumer component instead of
-   spelling them by hand:
+2. Expand the current Nix-side extraction from unconditional Cabal
+   `cpp-options` to more of the component context:
    ```text
    -fplugin-opt=THCross.Plugin:host-ghc-option=-Dandroid_HOST_OS
    -fplugin-opt=THCross.Plugin:host-ghc-option=-I...
    ```
-3. In Nix integration, derive worker args from the cross package
-   component, but map dependencies to host-buildable TH dependencies.
+3. Preserve conditional Cabal choices and generated source/include directories
+   rather than reading only unconditional fields from the `.cabal` syntax.
 4. Add a diagnostic mode that logs native worker `targetPlatform` and relevant
    CPP/package options for each module load.
 5. Expand cross-GHC tests from the current smoke fixtures to CPP-sensitive and

@@ -729,6 +729,26 @@ fourth field of `-fplugin-library` as `host-source-dir=...`. Separate
 external plugins loaded through `-fplugin-library` receive the option list from
 the `-fplugin-library` argument.
 
+The same path now derives unconditional Cabal `cpp-options` with
+`nix/tools/dump-cabal-cpp-options.hs`. Each extracted option is embedded into
+the plugin option list as:
+
+```text
+host-ghc-option=<cpp option>
+```
+
+The `th-consumer-example` package uses this for a CPP-sensitive splice:
+`Example` defines either `TargetPlatform` or `HostPlatform`, and the splice
+reifies `Platform` through the host worker. The package-level cross build only
+passes because Cabal's `cpp-options: -DTH_CONSUMER_TARGET_CONTEXT` is forwarded
+to the worker, causing the host-side expansion to return `TargetPlatform`, the
+constructor visible to the cross compiler.
+
+This is still intentionally limited. The current dumper reads unconditional
+fields from the `.cabal` syntax; it does not yet preserve Cabal conditional
+resolution, generated include directories, `autogen` CPP macros, or arbitrary
+tool-specific preprocessing flags from `setup-config`.
+
 Run the resulting aarch64 executable under qemu:
 
 ```bash

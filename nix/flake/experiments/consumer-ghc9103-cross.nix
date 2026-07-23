@@ -81,6 +81,23 @@ EOF
 
         export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+        ${pkgs.haskell.compiler.ghc9103}/bin/ghc \
+          -v0 \
+          -package Cabal \
+          --make ${../../../nix/tools/dump-cabal-cpp-options.hs} \
+          -o dump-cabal-cpp-options
+
+        ./dump-cabal-cpp-options \
+          > th-cross-cabal-cpp-options
+
+        plugin_options="[\"worker=${worker}\""
+        while IFS= read -r cpp_option; do
+          if [ -n "$cpp_option" ]; then
+            plugin_options="$plugin_options,\"host-ghc-option=$cpp_option\""
+          fi
+        done < th-cross-cabal-cpp-options
+        plugin_options="$plugin_options]"
+
         {
           echo "crossTargetTriple=${crossTargetTriple}"
           echo "crossGhc=${crossGhc}"
@@ -108,7 +125,7 @@ EOF
           --ghc-option=-v0 \
           --ghc-option=-fno-external-interpreter \
           --ghc-option=-fforce-recomp \
-          "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;[\"worker=${worker}\"]" \
+          "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;$plugin_options" \
           >> "$report" 2>&1
 
         ${pkgs.haskell.compiler.ghc9103}/bin/runghc Setup.hs build \
@@ -269,11 +286,12 @@ ${pkgs.lib.concatStringsSep "\n" excludedPackageNames}
 EOF
 
           awk '/^  / { print $1 }' "$out/nix-support/cabal-component-deps" \
-            | grep -F -x -v -f "$out/nix-support/excluded-host-package-names" \
+            | { grep -F -x -v -f "$out/nix-support/excluded-host-package-names" || true; } \
             | sort -u \
             > "$out/nix-support/cabal-derived-package-names"
 
-          sort -u "$out/nix-support/nix-derived-host-package-names" \
+          sed '/^$/d' "$out/nix-support/nix-derived-host-package-names" \
+            | sort -u \
             > "$out/nix-support/nix-derived-host-package-names.sorted"
 
           if ! diff -u \
@@ -302,6 +320,24 @@ EOF
               plugin_options="$plugin_options,\"host-source-dir=$PWD/$source_dir\""
             fi
           done < th-cross-cabal-source-dirs
+        '';
+
+      appendCabalCppOptionsToPluginOptions =
+        ''
+          ${pkgs.haskell.compiler.ghc9103}/bin/ghc \
+            -v0 \
+            -package Cabal \
+            --make ${../../../nix/tools/dump-cabal-cpp-options.hs} \
+            -o dump-cabal-cpp-options
+
+          ./dump-cabal-cpp-options \
+            > th-cross-cabal-cpp-options
+
+          while IFS= read -r cpp_option; do
+            if [ -n "$cpp_option" ]; then
+              plugin_options="$plugin_options,\"host-ghc-option=$cpp_option\""
+            fi
+          done < th-cross-cabal-cpp-options
         '';
 
       mkConsumerDerivationWithWorker =
@@ -336,6 +372,7 @@ EOF
                 plugin_options="$plugin_options,\"host-package-id=$host_package_id\""
               '') externalHostPackageNames}
               ${appendCabalSourceDirsToPluginOptions}
+              ${appendCabalCppOptionsToPluginOptions}
               plugin_options="$plugin_options]"
 
               appendToVar configureFlags "--ghc-option=-v0"
