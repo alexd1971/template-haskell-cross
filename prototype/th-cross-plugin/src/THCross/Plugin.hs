@@ -183,6 +183,7 @@ workerMetaHook workerState config request spliceExpr = do
       do
         spliceResult <-
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+        logSpliceResult spliceResult
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
         replayAddedTopDecls config (spliceResultAddedTopDecls spliceResult)
@@ -193,6 +194,7 @@ workerMetaHook workerState config request spliceExpr = do
       do
         spliceResult <-
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+        logSpliceResult spliceResult
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
@@ -214,11 +216,15 @@ workerMetaHook workerState config request spliceExpr = do
       do
         spliceResult <-
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+        logSpliceResult spliceResult
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
         replayAddedTopDecls config (spliceResultAddedTopDecls spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
         decodeAnnotationWrapper spliceResult
+
+    logSpliceResult spliceResult =
+      debugLog ("generated-haskell: " <> spliceResultHaskell spliceResult)
 
 -- | Decode a same-version binary 'Serialized' annotation wrapper returned by
 -- the host worker.
@@ -239,6 +245,7 @@ data PluginConfig = PluginConfig
   { pluginWorkerPath :: !FilePath
   , pluginHostPackageIds :: ![String]
   , pluginHostSourceDirs :: ![FilePath]
+  , pluginHostGhcOptions :: ![String]
   , pluginDebug :: !Bool
   }
   deriving (Eq, Show)
@@ -261,6 +268,7 @@ data WorkerHandle = WorkerHandle
 -- -fplugin-opt=THCross.Plugin:worker=/path/to/th-host-worker
 -- -fplugin-opt=THCross.Plugin:host-package-id=unit-id
 -- -fplugin-opt=THCross.Plugin:host-source-dir=src
+-- -fplugin-opt=THCross.Plugin:host-ghc-option=-DNAME
 -- -fplugin-opt=THCross.Plugin:debug
 -- @
 --
@@ -276,6 +284,7 @@ parsePluginConfig opts =
           { pluginWorkerPath = workerPath
           , pluginHostPackageIds = findHostPackageIds opts
           , pluginHostSourceDirs = findHostSourceDirs opts
+          , pluginHostGhcOptions = findHostGhcOptions opts
           , pluginDebug = "debug" `elem` opts
           }
     Nothing ->
@@ -299,6 +308,11 @@ findHostPackageIds =
 findHostSourceDirs :: [CommandLineOption] -> [FilePath]
 findHostSourceDirs =
   mapMaybe (stripPrefix "host-source-dir=")
+
+-- | Extract extra GHC command-line options for the host-side module load.
+findHostGhcOptions :: [CommandLineOption] -> [String]
+findHostGhcOptions =
+  mapMaybe (stripPrefix "host-ghc-option=")
 
 -- | Emit a plugin debug line when @debug@ was passed in plugin options.
 whenDebug :: PluginConfig -> String -> TcM ()
@@ -329,8 +343,9 @@ mkSpliceRequest ::
   String ->
   [String] ->
   [FilePath] ->
+  [String] ->
   SpliceRequest
-mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs =
+mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs hostGhcOptions =
   let (sourceFile, protocolSpan) = protocolSourceSpan sourceLoc
    in SpliceRequest
         { requestId = spliceModuleName <> ":" <> spliceKindToStr spliceKind <> ":" <> renderedSpan
@@ -344,6 +359,7 @@ mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSp
         , requestCrossGhcVersion = cProjectVersion
         , requestHostPackageIds = hostPackageIds
         , requestHostSourceDirs = hostSourceDirs
+        , requestHostGhcOptions = hostGhcOptions
         }
 
 -- | Convert GHC's source span into protocol data.
@@ -384,7 +400,7 @@ requestWorker ::
   TcM SpliceResult
 requestWorker workerState config spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr = do
   let workerRequest =
-        mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr (pluginHostPackageIds config) (pluginHostSourceDirs config)
+        mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr (pluginHostPackageIds config) (pluginHostSourceDirs config) (pluginHostGhcOptions config)
   whenDebug config ("worker: " <> pluginWorkerPath config)
   callWorker config workerState (pluginWorkerPath config) workerRequest >>= \case
     Left err -> do

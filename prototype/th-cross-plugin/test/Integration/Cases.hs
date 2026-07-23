@@ -7,7 +7,9 @@ import Integration.Harness
   , ExpectedExit (ExpectFailure, ExpectSuccess)
   , TestEnv
   , compileNatively
+  , compileNativelyWithOptions
   , compileWithPlugin
+  , compileWithPluginOptions
   , expectSuccess
   )
 import Test.Tasty (TestTree, testGroup)
@@ -45,6 +47,27 @@ testTrees testEnv =
                   , ("th-host-worker: cache hit", 1)
                   ]
               }
+      ]
+  , testGroup
+      "target-context"
+      [ testGroup
+          "forwarded-cpp-define"
+          [ testCase "plugin" $
+              compileWithPluginOptions
+                testEnv
+                "CppTargetContext.hs"
+                targetCppOptions
+                expectSuccess
+                  { expectedStdout =
+                      [("generated-haskell: TargetPlatform", 1)]
+                  }
+          , testCase "native" $
+              compileNativelyWithOptions
+                testEnv
+                "CppTargetContext.hs"
+                ["-DTH_CROSS_TARGET_CONTEXT"]
+                expectSuccess
+          ]
       ]
   , testGroup
       "q effects"
@@ -97,6 +120,11 @@ testTrees testEnv =
       ]
   , addTopDeclsTests testEnv
   ]
+  where
+    targetCppOptions =
+      [ "-DTH_CROSS_TARGET_CONTEXT"
+      , "-fplugin-opt=THCross.Plugin:host-ghc-option=-DTH_CROSS_TARGET_CONTEXT"
+      ]
 
 addTopDeclsTests :: TestEnv -> TestTree
 addTopDeclsTests testEnv =

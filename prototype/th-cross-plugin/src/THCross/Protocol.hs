@@ -262,6 +262,8 @@ data SpliceRequest = SpliceRequest
     requestHostPackageIds :: ![String]
   , -- | Extra source directories visible to host GHC while loading this module.
     requestHostSourceDirs :: ![FilePath]
+  , -- | Extra GHC options applied to the host-side module load.
+    requestHostGhcOptions :: ![String]
   }
   deriving (Eq, Show)
 
@@ -279,6 +281,7 @@ instance ToJSON SpliceRequest where
       , "crossGhcVersion" .= requestCrossGhcVersion request
       , "hostPackageIds" .= requestHostPackageIds request
       , "hostSourceDirs" .= requestHostSourceDirs request
+      , "hostGhcOptions" .= requestHostGhcOptions request
       ]
 
 instance FromJSON SpliceRequest where
@@ -296,6 +299,7 @@ instance FromJSON SpliceRequest where
         <*> obj .: "crossGhcVersion"
         <*> obj .:? "hostPackageIds" .!= []
         <*> obj .:? "hostSourceDirs" .!= []
+        <*> obj .:? "hostGhcOptions" .!= []
 
 -- | Response returned by the native host worker.
 data SpliceResponse

@@ -3,7 +3,9 @@ module Integration.Harness
   , ExpectedExit (..)
   , TestEnv (..)
   , compileNatively
+  , compileNativelyWithOptions
   , compileWithPlugin
+  , compileWithPluginOptions
   , expectSuccess
   , findProjectRoot
   ) where
@@ -63,21 +65,29 @@ expectSuccess =
 
 compileWithPlugin :: TestEnv -> FilePath -> CompileExpectation -> Assertion
 compileWithPlugin testEnv modulePath expectation =
+  compileWithPluginOptions testEnv modulePath [] expectation
+
+compileWithPluginOptions :: TestEnv -> FilePath -> [String] -> CompileExpectation -> Assertion
+compileWithPluginOptions testEnv modulePath extraGhcOptions expectation =
   runCompileSpec testEnv $
     CompileSpec
       { specLabel = "plugin"
       , specModulePath = modulePath
-      , specGhcOptions = workerPluginOptions testEnv
+      , specGhcOptions = workerPluginOptions testEnv <> extraGhcOptions
       , specExpectation = expectation
       }
 
 compileNatively :: TestEnv -> FilePath -> CompileExpectation -> Assertion
 compileNatively testEnv modulePath expectation =
+  compileNativelyWithOptions testEnv modulePath [] expectation
+
+compileNativelyWithOptions :: TestEnv -> FilePath -> [String] -> CompileExpectation -> Assertion
+compileNativelyWithOptions testEnv modulePath extraGhcOptions expectation =
   runCompileSpec testEnv $
     CompileSpec
       { specLabel = "native"
       , specModulePath = modulePath
-      , specGhcOptions = []
+      , specGhcOptions = extraGhcOptions
       , specExpectation = expectation
       }
 
@@ -92,26 +102,27 @@ runCompileSpec
           </> sanitizePathSegment (specLabel spec <> "-" <> specModulePath spec)
   createDirectoryIfMissing True testBuildDir
   let args =
-        [ "exec"
-        ]
-          <> cabalProjectArgs (testProjectRoot testEnv)
+        cabalGlobalArgs (testProjectRoot testEnv)
+          <> [ "exec"
+             ]
+          <> cabalCommandArgs (testProjectRoot testEnv)
           <> [ "--"
-        , "ghc"
-        , "-v0"
-        , "-fno-code"
-        , "-fforce-recomp"
-        , "-package"
-        , "th-cross-plugin"
-        , "-i" <> testFixturesDir testEnv
-        , "-outputdir"
-        , testBuildDir
-        , "-hidir"
-        , testBuildDir
-        , "-odir"
-        , testBuildDir
-        , "-stubdir"
-        , testBuildDir
-        ]
+             , "ghc"
+             , "-v0"
+             , "-fno-code"
+             , "-fforce-recomp"
+             , "-package"
+             , "th-cross-plugin"
+             , "-i" <> testFixturesDir testEnv
+             , "-outputdir"
+             , testBuildDir
+             , "-hidir"
+             , testBuildDir
+             , "-odir"
+             , testBuildDir
+             , "-stubdir"
+             , testBuildDir
+             ]
           <> specGhcOptions spec
           <> [specModulePath spec]
   envVars <- getEnvironment
@@ -213,10 +224,18 @@ inProject :: FilePath -> CreateProcess -> CreateProcess
 inProject projectRoot createProcess =
   createProcess {cwd = Just projectRoot}
 
-cabalProjectArgs :: FilePath -> [String]
-cabalProjectArgs projectRoot =
+cabalGlobalArgs :: FilePath -> [String]
+cabalGlobalArgs projectRoot =
+  [ "--store-dir"
+  , takeDirectory projectRoot </> ".cabal-store-nix"
+  ]
+
+cabalCommandArgs :: FilePath -> [String]
+cabalCommandArgs projectRoot =
   [ "--project-dir"
   , projectRoot
+  , "--builddir"
+  , "dist-newstyle-nix"
   , "--with-compiler"
   , "ghc-9.8.4"
   , "--with-hc-pkg"

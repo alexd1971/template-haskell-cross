@@ -63,6 +63,9 @@ same-GHC-version helper for replaying annotation declarations produced by
   ],
   "hostSourceDirs": [
     "src"
+  ],
+  "hostGhcOptions": [
+    "-Dandroid_HOST_OS"
   ]
 }
 ```
@@ -89,6 +92,11 @@ Fields:
   native GHC session's import path. This is needed when the splice module imports
   another source module from the same package, for example an executable module
   importing its package's library component.
+- `hostGhcOptions`: extra GHC command-line options that the worker applies to
+  the native GHC session before loading the module. The intended first use is
+  forwarding target-like preprocessing options such as `-D`, `-U`, `-I`, and
+  `-optP` so host-side `reify` observes the same CPP-shaped source as the
+  cross-side compiler.
 
 ## Successful Response
 

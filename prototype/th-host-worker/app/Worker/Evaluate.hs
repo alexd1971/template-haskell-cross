@@ -38,11 +38,13 @@ import GHC.Driver.Session
   , ModRenaming (ModRenaming)
   , PackageArg (UnitIdArg)
   , PackageFlag (ExposePackage)
+  , flagsAll
   , gopt_set
   , hiDir
   , importPaths
   , objectDir
   , packageFlags
+  , parseDynamicFlagsFull
   , stubDir
   )
 import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr)
@@ -70,10 +72,12 @@ import GHC.Types.Meta
   )
 import GHC.Types.SrcLoc
   ( SrcSpan (..)
+  , noLoc
   , srcSpanEndCol
   , srcSpanEndLine
   , srcSpanStartCol
   , srcSpanStartLine
+  , unLoc
   )
 import GHC.Unit.Module (moduleName, moduleNameString)
 import GHC.Unit.Types (stringToUnit)
@@ -196,7 +200,17 @@ captureModuleSplices request = do
   createDirectoryIfMissing True hostWorkerBuildDir
   result <- runGhc (Just ghcLibDir) $ do
     dflags <- getSessionDynFlags
-    setSessionDynFlags (workerDynFlags extraPackageIds dflags)
+    (dflagsWithHostOptions, remainingArgs, _warnings) <-
+      parseDynamicFlagsFull
+        flagsAll
+        True
+        (workerDynFlags extraPackageIds dflags)
+        (map noLoc (requestHostGhcOptions request))
+    case remainingArgs of
+      [] ->
+        setSessionDynFlags dflagsWithHostOptions
+      _ ->
+        fail ("unsupported host GHC option(s): " <> show (map unLoc remainingArgs))
     installCaptureHook capturesRef dependentFilesRef foreignFilesRef
     loadRequestedModule
   case result of
