@@ -914,6 +914,17 @@ th-cross-build
 th-cross-test
 ```
 
+The shell also exports:
+
+```text
+TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.8.4/lib/ghc-9.8.4/lib
+```
+
+Integration tests require this variable so the host worker always initializes
+the Nix-provided GHC 9.8.4 session. Running `cabal test` manually is supported,
+but it should be done from inside `nix develop`; otherwise the test runner fails
+early instead of accidentally discovering another GHC from `PATH`.
+
 The helper scripts use a separate Cabal store/build directory:
 
 ```text
@@ -941,6 +952,27 @@ Run the integration test:
 ```bash
 th-cross-test
 ```
+
+By default this runs:
+
+```bash
+th-cross-test th-cross-plugin:integration --test-show-details=direct
+```
+
+The explicit `direct` mode is intentional: the integration suite takes about a
+minute and should print each test case as it runs instead of looking stuck after
+`Test suite integration: RUNNING...`.
+
+The helper also builds `th-host-worker` before invoking `cabal test`, discovers
+its executable path with `cabal list-bin`, and exports it as:
+
+```text
+TH_HOST_WORKER=/path/to/th-host-worker
+```
+
+This is deliberately done outside the test executable. Calling `cabal build`
+from inside a `cabal test` process can wait on Cabal's own build/store locks and
+look like a hung test suite.
 
 The build helper is equivalent to:
 

@@ -3,10 +3,7 @@
 -- | Prototype GHC plugin for intercepting Template Haskell splice evaluation.
 --
 -- The plugin installs a custom 'runMetaHook' through the driver plugin hook.
--- By default it logs each splice and delegates to GHC's normal Template
--- Haskell evaluator. With @-fplugin-opt=THCross.Plugin:dummy-expr@ it replaces
--- expression splices with locally parsed @42@. With
--- @-fplugin-opt=THCross.Plugin:worker=PATH@ it asks an external JSON-lines
+-- With @-fplugin-opt=THCross.Plugin:worker=PATH@ it asks an external JSON-lines
 -- worker for generated Haskell text, parses that text locally, and returns the
 -- resulting @GhcPs@ AST.
 module THCross.Plugin (plugin) where
@@ -17,6 +14,7 @@ import Control.Concurrent.MVar
   , newMVar
   )
 import Control.Exception (IOException, try)
+import Control.Monad (when)
 import Data.Binary (decodeOrFail)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as BL
@@ -34,7 +32,6 @@ import GHC.Data.FastString (unpackFS)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Serialized (Serialized)
 import GHC.Settings.Config (cProjectVersion)
-import GHC.Tc.Gen.Splice (defaultRunMeta)
 #if MIN_VERSION_ghc(9,8,0)
 import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
 #endif
@@ -104,7 +101,7 @@ import THCross.SpliceKey
 
 -- | Entry point discovered by GHC when @-fplugin=THCross.Plugin@ is used.
 --
--- The plugin only mutates 'HscEnv' to install 'loggingMetaHook'; it does not
+-- The plugin only mutates 'HscEnv' to install 'workerMetaHook'; it does not
 -- alter Core, typechecking, or parsed/renamed module results.
 plugin :: Plugin
 plugin =
@@ -117,62 +114,56 @@ plugin =
 --
 -- GHC calls this once after loading the plugin. The hook is stored in
 -- 'hsc_hooks', so all subsequent TH splice evaluation in this session goes
--- through 'loggingMetaHook'.
+-- through 'workerMetaHook'.
 installHook :: [CommandLineOption] -> HscEnv -> IO HscEnv
 installHook opts hscEnv = do
+  config <- parsePluginConfig opts
   workerState <- newMVar Nothing
   let hooks0 = hsc_hooks hscEnv
-      hooks1 = hooks0 {runMetaHook = Just (loggingMetaHook workerState (pluginMode opts))}
+      hooks1 = hooks0 {runMetaHook = Just (workerMetaHook workerState config)}
   pure hscEnv {hsc_hooks = hooks1}
 
 -- | Log metadata for every intercepted TH request and then evaluate it.
 --
--- In normal mode this delegates to 'defaultRunMeta', preserving stock GHC TH
--- behavior. In dummy expression mode, only 'MetaE' requests are replaced with
--- @42@. In worker mode, expression splices are delegated to the configured
--- external worker. Declaration splices are also delegated so declaration-group
--- ordering can be preserved for later expression splices.
-loggingMetaHook :: WorkerState -> PluginMode -> MetaHook TcM
-loggingMetaHook workerState mode request spliceExpr = do
+-- The hook always delegates splice execution to the configured external
+-- worker. Debug logging is intentionally orthogonal to behavior: enabling
+-- @debug@ only changes observability, not the evaluation path.
+workerMetaHook :: WorkerState -> PluginConfig -> MetaHook TcM
+workerMetaHook workerState config request spliceExpr = do
   tcGblEnv <- getGblEnv
-  liftIO $ putStrLn "th-cross: intercepted Template Haskell splice"
-  liftIO $ putStrLn ("module: " <> spliceModuleName tcGblEnv)
-  liftIO $ putStrLn ("kind: " <> spliceKindName)
-  liftIO $ putStrLn ("splice-key: " <> unSpliceKey (spliceKey tcGblEnv))
-  liftIO $ putStrLn ("location: " <> renderedSpan)
-  liftIO $ putStrLn ("expression: " <> renderedSpliceExpr)
+  debugLog "th-cross: intercepted Template Haskell splice"
+  debugLog ("module: " <> spliceModuleName tcGblEnv)
+  debugLog ("kind: " <> spliceKindName)
+  debugLog ("splice-key: " <> unSpliceKey (spliceKey tcGblEnv))
+  debugLog ("location: " <> renderedSpan)
+  debugLog ("expression: " <> renderedSpliceExpr)
   case request of
-    MetaE wrap
-      | DummyExprMode <- mode -> do
-          liftIO $ putStrLn "replacement: 42"
-          generated <- parseExpressionFragment "42"
-          pure (wrap generated)
-      | WorkerMode{} <- mode -> do
-          generated <-
-            evaluateWorkerSplice tcGblEnv parseExpressionFragment
-          pure (wrap generated)
-    MetaD wrap
-      | WorkerMode{} <- mode -> do
-          generated <-
-            evaluateWorkerDeclarationSplice tcGblEnv
-          pure (wrap generated)
-    MetaP wrap
-      | WorkerMode{} <- mode -> do
-          generated <-
-            evaluateWorkerSplice tcGblEnv parsePatternFragment
-          pure (wrap generated)
-    MetaT wrap
-      | WorkerMode{} <- mode -> do
-          generated <-
-            evaluateWorkerSplice tcGblEnv parseTypeFragment
-          pure (wrap generated)
-    MetaAW wrap
-      | WorkerMode{} <- mode -> do
-          annotationWrapper <-
-            evaluateWorkerAnnotationWrapper tcGblEnv
-          pure (wrap annotationWrapper)
-    _ -> defaultRunMeta request spliceExpr
+    MetaE wrap -> do
+      generated <-
+        evaluateWorkerSplice tcGblEnv parseExpressionFragment
+      pure (wrap generated)
+    MetaD wrap -> do
+      generated <-
+        evaluateWorkerDeclarationSplice tcGblEnv
+      pure (wrap generated)
+    MetaP wrap -> do
+      generated <-
+        evaluateWorkerSplice tcGblEnv parsePatternFragment
+      pure (wrap generated)
+    MetaT wrap -> do
+      generated <-
+        evaluateWorkerSplice tcGblEnv parseTypeFragment
+      pure (wrap generated)
+    MetaAW wrap -> do
+      annotationWrapper <-
+        evaluateWorkerAnnotationWrapper tcGblEnv
+      pure (wrap annotationWrapper)
   where
+    debugLog message =
+      if pluginDebug config
+        then liftIO (putStrLn message)
+        else pure ()
+
     spliceModuleName tcGblEnv =
       moduleNameString (moduleName (tcg_mod tcGblEnv))
 
@@ -189,29 +180,23 @@ loggingMetaHook workerState mode request spliceExpr = do
       mkSpliceKey (spliceModuleName tcGblEnv) spliceKindName (sourceSpanKeyText protocolSpan)
 
     evaluateWorkerSplice tcGblEnv parseFragment =
-      case mode of
-        WorkerMode workerPath hostPackageIds hostSourceDirs -> do
-          spliceResult <-
-            requestWorker workerState workerPath (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds hostSourceDirs
-          replayDependentFiles (spliceResultDependentFiles spliceResult)
-          replayForeignFiles (spliceResultForeignFiles spliceResult)
-          replayAddedTopDecls (spliceResultAddedTopDecls spliceResult)
-          replayDiagnostics (spliceResultDiagnostics spliceResult)
-          parseFragment (spliceResultHaskell spliceResult)
-        _ ->
-          fail "evaluateWorkerSplice called outside worker mode"
+      do
+        spliceResult <-
+          requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+        replayDependentFiles config (spliceResultDependentFiles spliceResult)
+        replayForeignFiles config (spliceResultForeignFiles spliceResult)
+        replayAddedTopDecls config (spliceResultAddedTopDecls spliceResult)
+        replayDiagnostics (spliceResultDiagnostics spliceResult)
+        parseFragment (spliceResultHaskell spliceResult)
 
     evaluateWorkerDeclarationSplice tcGblEnv =
-      case mode of
-        WorkerMode workerPath hostPackageIds hostSourceDirs -> do
-          spliceResult <-
-            requestWorker workerState workerPath (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds hostSourceDirs
-          replayDependentFiles (spliceResultDependentFiles spliceResult)
-          replayForeignFiles (spliceResultForeignFiles spliceResult)
-          replayDiagnostics (spliceResultDiagnostics spliceResult)
-          parseDeclarationSpliceResult spliceResult
-        _ ->
-          fail "evaluateWorkerDeclarationSplice called outside worker mode"
+      do
+        spliceResult <-
+          requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+        replayDependentFiles config (spliceResultDependentFiles spliceResult)
+        replayForeignFiles config (spliceResultForeignFiles spliceResult)
+        replayDiagnostics (spliceResultDiagnostics spliceResult)
+        parseDeclarationSpliceResult spliceResult
 
     parseDeclarationSpliceResult spliceResult = do
       addedDecls <- parseAddedTopDeclsForDeclarationSplice (spliceResultAddedTopDecls spliceResult)
@@ -222,25 +207,18 @@ loggingMetaHook workerState mode request spliceExpr = do
       | null addedTopDecls = pure []
       | otherwise = do
           parsedDecls <- parseDeclarationFragments addedTopDecls
-          liftIO $
-            putStrLn
-              ( "th-cross: added top decls "
-                  <> show (length parsedDecls)
-              )
+          debugLog ("th-cross: added top decls " <> show (length parsedDecls))
           pure parsedDecls
 
     evaluateWorkerAnnotationWrapper tcGblEnv =
-      case mode of
-        WorkerMode workerPath hostPackageIds hostSourceDirs -> do
-          spliceResult <-
-            requestWorker workerState workerPath (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds hostSourceDirs
-          replayDependentFiles (spliceResultDependentFiles spliceResult)
-          replayForeignFiles (spliceResultForeignFiles spliceResult)
-          replayAddedTopDecls (spliceResultAddedTopDecls spliceResult)
-          replayDiagnostics (spliceResultDiagnostics spliceResult)
-          decodeAnnotationWrapper spliceResult
-        _ ->
-          fail "evaluateWorkerAnnotationWrapper called outside worker mode"
+      do
+        spliceResult <-
+          requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+        replayDependentFiles config (spliceResultDependentFiles spliceResult)
+        replayForeignFiles config (spliceResultForeignFiles spliceResult)
+        replayAddedTopDecls config (spliceResultAddedTopDecls spliceResult)
+        replayDiagnostics (spliceResultDiagnostics spliceResult)
+        decodeAnnotationWrapper spliceResult
 
 -- | Decode a same-version binary 'Serialized' annotation wrapper returned by
 -- the host worker.
@@ -256,11 +234,13 @@ decodeAnnotationWrapper spliceResult =
         Right (_, _, serialized) ->
           pure serialized
 
--- | Runtime behavior selected by plugin options.
-data PluginMode
-  = PassthroughMode
-  | DummyExprMode
-  | WorkerMode FilePath [String] [FilePath]
+-- | Runtime configuration selected by plugin options.
+data PluginConfig = PluginConfig
+  { pluginWorkerPath :: !FilePath
+  , pluginHostPackageIds :: ![String]
+  , pluginHostSourceDirs :: ![FilePath]
+  , pluginDebug :: !Bool
+  }
   deriving (Eq, Show)
 
 -- | Persistent worker process state for one GHC session.
@@ -273,25 +253,33 @@ data WorkerHandle = WorkerHandle
   , workerProcess :: !ProcessHandle
   }
 
--- | Select plugin behavior from command-line options.
+-- | Parse plugin behavior from command-line options.
 --
 -- Supported options:
 --
 -- @
--- -fplugin-opt=THCross.Plugin:dummy-expr
 -- -fplugin-opt=THCross.Plugin:worker=/path/to/th-host-worker
 -- -fplugin-opt=THCross.Plugin:host-package-id=unit-id
 -- -fplugin-opt=THCross.Plugin:host-source-dir=src
+-- -fplugin-opt=THCross.Plugin:debug
 -- @
 --
 -- When the plugin is loaded through @-fplugin-library@, pass the same option
 -- strings in that flag's fourth field instead of separate @-fplugin-opt@
 -- arguments.
-pluginMode :: [CommandLineOption] -> PluginMode
-pluginMode opts
-  | "dummy-expr" `elem` opts = DummyExprMode
-  | Just workerPath <- findWorkerPath opts = WorkerMode workerPath (findHostPackageIds opts) (findHostSourceDirs opts)
-  | otherwise = PassthroughMode
+parsePluginConfig :: [CommandLineOption] -> IO PluginConfig
+parsePluginConfig opts =
+  case findWorkerPath opts of
+    Just workerPath ->
+      pure
+        PluginConfig
+          { pluginWorkerPath = workerPath
+          , pluginHostPackageIds = findHostPackageIds opts
+          , pluginHostSourceDirs = findHostSourceDirs opts
+          , pluginDebug = "debug" `elem` opts
+          }
+    Nothing ->
+      ioError (userError "THCross.Plugin requires -fplugin-opt=THCross.Plugin:worker=/path/to/th-host-worker")
 
 -- | Extract the external worker executable path from plugin options.
 --
@@ -311,6 +299,11 @@ findHostPackageIds =
 findHostSourceDirs :: [CommandLineOption] -> [FilePath]
 findHostSourceDirs =
   mapMaybe (stripPrefix "host-source-dir=")
+
+-- | Emit a plugin debug line when @debug@ was passed in plugin options.
+whenDebug :: PluginConfig -> String -> TcM ()
+whenDebug config message =
+  when (pluginDebug config) (liftIO (putStrLn message))
 
 -- | Human-readable splice kind used in prototype logging.
 metaRequestKind :: MetaRequest -> SpliceKind
@@ -380,7 +373,7 @@ protocolSourceSpan = \case
 -- required by the specific 'MetaRequest' constructor.
 requestWorker ::
   WorkerState ->
-  FilePath ->
+  PluginConfig ->
   String ->
   String ->
   SpliceKind ->
@@ -388,46 +381,40 @@ requestWorker ::
   String ->
   SpliceKey ->
   String ->
-  [String] ->
-  [FilePath] ->
   TcM SpliceResult
-requestWorker workerState workerPath spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs = do
+requestWorker workerState config spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr = do
   let workerRequest =
-        mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs
-  liftIO $ putStrLn ("worker: " <> workerPath)
-  callWorker workerState workerPath workerRequest >>= \case
+        mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr (pluginHostPackageIds config) (pluginHostSourceDirs config)
+  whenDebug config ("worker: " <> pluginWorkerPath config)
+  callWorker config workerState (pluginWorkerPath config) workerRequest >>= \case
     Left err -> do
-      liftIO $ putStrLn ("worker-error: " <> err)
+      whenDebug config ("worker-error: " <> err)
       fail err
     Right spliceResult ->
       pure spliceResult
 
 -- | Replay host-side @addDependentFile@ effects in the cross-side GHC session.
-replayDependentFiles :: [FilePath] -> TcM ()
-replayDependentFiles dependentFiles = do
+replayDependentFiles :: PluginConfig -> [FilePath] -> TcM ()
+replayDependentFiles config dependentFiles = do
   tcGblEnv <- getGblEnv
   updTcRef (tcg_dependent_files tcGblEnv) (dependentFiles <>)
-  liftIO $
-    mapM_
-      (\filePath -> putStrLn ("th-cross: dependent file " <> filePath))
-      dependentFiles
+  mapM_ (whenDebug config . ("th-cross: dependent file " <>)) dependentFiles
 
 -- | Replay host-side @addForeignFilePath@ effects in the cross GHC session.
-replayForeignFiles :: [SpliceForeignFile] -> TcM ()
-replayForeignFiles foreignFiles = do
+replayForeignFiles :: PluginConfig -> [SpliceForeignFile] -> TcM ()
+replayForeignFiles config foreignFiles = do
   tcGblEnv <- getGblEnv
   updTcRef (tcg_th_foreign_files tcGblEnv) (foreignFileTuples <>)
-  liftIO $
-    mapM_
-      ( \foreignFile ->
-          putStrLn
-            ( "th-cross: foreign file "
-                <> foreignSrcLangToStr (spliceForeignFileLang foreignFile)
-                <> " "
-                <> spliceForeignFilePath foreignFile
-            )
-      )
-      foreignFiles
+  mapM_
+    ( \foreignFile ->
+        whenDebug config
+          ( "th-cross: foreign file "
+              <> foreignSrcLangToStr (spliceForeignFileLang foreignFile)
+              <> " "
+              <> spliceForeignFilePath foreignFile
+          )
+    )
+    foreignFiles
   where
     foreignFileTuples =
       map
@@ -437,18 +424,14 @@ replayForeignFiles foreignFiles = do
         foreignFiles
 
 -- | Replay host-side @addTopDecls@ effects in the cross GHC session.
-replayAddedTopDecls :: String -> TcM ()
-replayAddedTopDecls addedTopDecls
+replayAddedTopDecls :: PluginConfig -> String -> TcM ()
+replayAddedTopDecls config addedTopDecls
   | null addedTopDecls = pure ()
   | otherwise = do
       parsedDecls <- parseDeclarationFragments addedTopDecls
       tcGblEnv <- getGblEnv
       updTcRef (tcg_th_topdecls tcGblEnv) (parsedDecls <>)
-      liftIO $
-        putStrLn
-          ( "th-cross: added top decls "
-              <> show (length parsedDecls)
-          )
+      whenDebug config ("th-cross: added top decls " <> show (length parsedDecls))
 
 -- | Replay host-side @reportWarning@ and @reportError@ effects in cross GHC.
 replayDiagnostics :: [SpliceDiagnostic] -> TcM ()
@@ -479,17 +462,17 @@ replayDiagnostics =
 --
 -- The worker process is started lazily on the first splice and then reused for
 -- later splices in the same GHC session.
-callWorker :: WorkerState -> FilePath -> SpliceRequest -> TcM (Either String SpliceResult)
-callWorker workerState workerPath request =
+callWorker :: PluginConfig -> WorkerState -> FilePath -> SpliceRequest -> TcM (Either String SpliceResult)
+callWorker config workerState workerPath request =
   liftIO $
     modifyMVar workerState $ \maybeWorker -> do
       worker <-
         case maybeWorker of
           Just existingWorker -> do
-            putStrLn "th-cross: reusing worker"
+            when (pluginDebug config) (putStrLn "th-cross: reusing worker")
             pure existingWorker
           Nothing -> do
-            putStrLn ("th-cross: started worker " <> workerPath)
+            when (pluginDebug config) (putStrLn ("th-cross: started worker " <> workerPath))
             startWorker workerPath
       result <- sendWorkerRequest worker request
       pure (Just worker, result)

@@ -2,10 +2,7 @@ module Integration.Harness
   ( CompileExpectation (..)
   , ExpectedExit (..)
   , TestEnv (..)
-  , cabalBuild
-  , cabalListBin
   , compileNatively
-  , compileWithDummyExpr
   , compileWithPlugin
   , expectSuccess
   , findProjectRoot
@@ -18,6 +15,7 @@ import System.Directory
   , doesFileExist
   , getCurrentDirectory
   )
+import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath
   ( (</>)
@@ -34,6 +32,7 @@ data TestEnv = TestEnv
   { testProjectRoot :: !FilePath
   , testFixturesDir :: !FilePath
   , testWorkerPath :: !FilePath
+  , testHostGhcLibDir :: !FilePath
   }
 
 data ExpectedExit
@@ -82,19 +81,6 @@ compileNatively testEnv modulePath expectation =
       , specExpectation = expectation
       }
 
-compileWithDummyExpr :: TestEnv -> FilePath -> Assertion
-compileWithDummyExpr testEnv modulePath =
-  runCompileSpec testEnv $
-    CompileSpec
-      { specLabel = "dummy-expr"
-      , specModulePath = modulePath
-      , specGhcOptions =
-          [ "-fplugin=THCross.Plugin"
-          , "-fplugin-opt=THCross.Plugin:dummy-expr"
-          ]
-      , specExpectation = expectSuccess
-      }
-
 runCompileSpec :: TestEnv -> CompileSpec -> Assertion
 runCompileSpec
   testEnv
@@ -107,9 +93,9 @@ runCompileSpec
   createDirectoryIfMissing True testBuildDir
   let args =
         [ "exec"
-        , "--project-dir"
-        , testProjectRoot testEnv
-        , "--"
+        ]
+          <> cabalProjectArgs (testProjectRoot testEnv)
+          <> [ "--"
         , "ghc"
         , "-v0"
         , "-fno-code"
@@ -128,7 +114,12 @@ runCompileSpec
         ]
           <> specGhcOptions spec
           <> [specModulePath spec]
-  (exitCode, out, err) <- readCreateProcessWithExitCode (inProject (testFixturesDir testEnv) (proc "cabal" args)) ""
+  envVars <- getEnvironment
+  let compileProcess =
+        (inProject (testFixturesDir testEnv) (proc "cabal" args))
+          { env = Just (("TH_HOST_GHC_LIBDIR", testHostGhcLibDir testEnv) : envVars)
+          }
+  (exitCode, out, err) <- readCreateProcessWithExitCode compileProcess ""
   let expectation = specExpectation spec
   checkExpectedExit (specLabel spec) (expectedExit expectation) exitCode out err
   checkOutputOccurrences "stdout" (specLabel spec) out (expectedStdout expectation)
@@ -138,6 +129,7 @@ workerPluginOptions :: TestEnv -> [String]
 workerPluginOptions testEnv =
   [ "-fplugin=THCross.Plugin"
   , "-fplugin-opt=THCross.Plugin:worker=" <> testWorkerPath testEnv
+  , "-fplugin-opt=THCross.Plugin:debug"
   ]
 
 checkExpectedExit :: String -> ExpectedExit -> ExitCode -> String -> String -> Assertion
@@ -199,40 +191,6 @@ countOccurrences needle haystack
             [] -> 0
             _ : rest -> go rest
 
-cabalBuild :: FilePath -> String -> IO ()
-cabalBuild projectRoot target = do
-  (exitCode, out, err) <-
-    readCreateProcessWithExitCode
-      (inProject projectRoot (proc "cabal" ["build", target]))
-      ""
-  case exitCode of
-    ExitSuccess ->
-      pure ()
-    ExitFailure code -> do
-      putStrLn ("cabal build failed with exit code " <> show code)
-      putStrLn "stdout:"
-      putStr out
-      putStrLn "stderr:"
-      putStr err
-      exitFailure
-
-cabalListBin :: FilePath -> String -> IO FilePath
-cabalListBin projectRoot executableName = do
-  (exitCode, out, err) <-
-    readCreateProcessWithExitCode
-      (inProject projectRoot (proc "cabal" ["list-bin", executableName]))
-      ""
-  case exitCode of
-    ExitSuccess ->
-      pure (trimTrailingNewline out)
-    ExitFailure code -> do
-      putStrLn ("cabal list-bin failed with exit code " <> show code)
-      putStrLn "stdout:"
-      putStr out
-      putStrLn "stderr:"
-      putStr err
-      exitFailure
-
 findProjectRoot :: IO FilePath
 findProjectRoot = do
   currentDir <- getCurrentDirectory
@@ -255,9 +213,15 @@ inProject :: FilePath -> CreateProcess -> CreateProcess
 inProject projectRoot createProcess =
   createProcess {cwd = Just projectRoot}
 
-trimTrailingNewline :: String -> String
-trimTrailingNewline =
-  reverse . dropWhile (`elem` ['\n', '\r']) . reverse
+cabalProjectArgs :: FilePath -> [String]
+cabalProjectArgs projectRoot =
+  [ "--project-dir"
+  , projectRoot
+  , "--with-compiler"
+  , "ghc-9.8.4"
+  , "--with-hc-pkg"
+  , "ghc-9.8.4-pkg"
+  ]
 
 sanitizePathSegment :: String -> FilePath
 sanitizePathSegment =

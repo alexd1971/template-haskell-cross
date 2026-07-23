@@ -7,7 +7,6 @@ import Integration.Harness
   , ExpectedExit (ExpectFailure, ExpectSuccess)
   , TestEnv
   , compileNatively
-  , compileWithDummyExpr
   , compileWithPlugin
   , expectSuccess
   )
@@ -18,9 +17,7 @@ testTrees :: TestEnv -> [TestTree]
 testTrees testEnv =
   [ testGroup
       "basic"
-      [ testCase "dummy expression replacement" $
-          compileWithDummyExpr testEnv "DummyExpr.hs"
-      , testCase "worker expression splice" $
+      [ testCase "worker expression splice" $
           compileWithPlugin testEnv "Example.hs" expectSuccess
       , testCase "worker type splice" $
           compileWithPlugin testEnv "TypeSplice.hs" expectSuccess
