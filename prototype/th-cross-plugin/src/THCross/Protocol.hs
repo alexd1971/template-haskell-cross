@@ -244,6 +244,8 @@ data SpliceRequest = SpliceRequest
     requestId :: !String
   , -- | Module currently being compiled by the cross-side GHC.
     requestModuleName :: !String
+  , -- | GHC unit id of the component currently compiling this module.
+    requestComponentUnitId :: !String
   , -- | Source file path that the host worker should load in native GHC.
     requestSourceFile :: !FilePath
   , -- | Splice result shape expected by the cross-side 'runMetaHook'.
@@ -268,6 +270,7 @@ instance ToJSON SpliceRequest where
     object
       [ "requestId" .= requestId request
       , "module" .= requestModuleName request
+      , "componentUnitId" .= requestComponentUnitId request
       , "sourceFile" .= requestSourceFile request
       , "spliceKind" .= requestSpliceKind request
       , "sourceSpan" .= requestSourceSpan request
@@ -284,6 +287,7 @@ instance FromJSON SpliceRequest where
       SpliceRequest
         <$> obj .: "requestId"
         <*> obj .: "module"
+        <*> obj .:? "componentUnitId" .!= ""
         <*> obj .: "sourceFile"
         <*> obj .: "spliceKind"
         <*> obj .: "sourceSpan"

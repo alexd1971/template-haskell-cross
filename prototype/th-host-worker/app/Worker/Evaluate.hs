@@ -113,11 +113,26 @@ data CapturedSplice = CapturedSplice
   , capturedSpliceResult :: !SpliceResult
   }
 
+-- | Worker-local cache key for one evaluated splice result.
+--
+-- 'SpliceKey' identifies the source occurrence. The component unit id and
+-- source file scope that occurrence to the Cabal/GHC component context that
+-- produced the expansion.
+data CacheKey = CacheKey
+  { cacheKeyComponentUnitId :: !String
+  , cacheKeySourceFile :: !FilePath
+  , cacheKeySpliceKey :: !SpliceKey
+  }
+  deriving (Eq, Ord, Show)
+
+-- | Cached expansion results across requests handled by one worker process.
+type CachedSplices = Map.Map CacheKey CapturedSplice
+
 -- | In-process cache of splice expansion results captured by whole-module loads.
 --
 -- The worker process is persistent, so this cache survives multiple requests
 -- handled by one worker. It is intentionally not written to disk yet.
-type EvaluationCache = IORef CapturedSplices
+type EvaluationCache = IORef CachedSplices
 
 -- | Create an empty worker-local expansion cache.
 newEvaluationCache :: IO EvaluationCache
@@ -150,7 +165,7 @@ handleEvalException =
 -- declaration-group ordering and invokes the hook for each splice it encounters.
 evaluateModuleSpliceResult :: EvaluationCache -> SpliceRequest -> IO (Either String SpliceResult)
 evaluateModuleSpliceResult cache request = do
-  cached <- selectCapturedSplice request <$> readIORef cache
+  cached <- selectCachedSplice request <$> readIORef cache
   case cached of
     Just spliceResult -> do
       hPutStrLn stderr ("th-host-worker: cache hit " <> requestSourceFile request)
@@ -162,8 +177,12 @@ evaluateModuleSpliceResult cache request = do
         Left err ->
           pure (Left err)
         Right captures -> do
-          modifyIORef' cache (Map.union captures)
-          pure (selectCapturedSpliceOrError request captures)
+          case selectCapturedSpliceOrError request captures of
+            Left err ->
+              pure (Left err)
+            Right spliceResult -> do
+              modifyIORef' cache (cacheModuleSplices request captures spliceResult)
+              pure (Right spliceResult)
 
 -- | Load the requested source module and capture all supported splice expansions.
 captureModuleSplices :: SpliceRequest -> IO (Either String CapturedSplices)
@@ -212,6 +231,66 @@ captureModuleSplices request = do
       target <- guessTarget (requestSourceFile request) Nothing Nothing
       setTargets [target]
       load LoadAllTargets
+
+-- | Cache key for the exact splice requested by the cross-side compiler.
+requestCacheKey :: SpliceRequest -> CacheKey
+requestCacheKey request =
+  cacheKeyFor request (requestSpliceKey request)
+
+-- | Scope a source-level splice key to the component context that evaluated it.
+cacheKeyFor :: SpliceRequest -> SpliceKey -> CacheKey
+cacheKeyFor request spliceKey =
+  CacheKey
+    { cacheKeyComponentUnitId = requestComponentUnitId request
+    , cacheKeySourceFile = requestSourceFile request
+    , cacheKeySpliceKey = spliceKey
+    }
+
+-- | Insert all splices captured by one whole-module load into the worker cache.
+--
+-- The requested key is inserted too so fallback matches, such as annotation
+-- wrappers with synthetic cross-side spans, become cache hits on later requests.
+cacheModuleSplices :: SpliceRequest -> CapturedSplices -> SpliceResult -> CachedSplices -> CachedSplices
+cacheModuleSplices request captures requestedSpliceResult cache =
+  Map.insert (requestCacheKey request) requestedCapturedSplice $
+    Map.union capturedCacheEntries cache
+  where
+    requestedCapturedSplice =
+      CapturedSplice (requestSpliceKind request) requestedSpliceResult
+
+    capturedCacheEntries =
+      Map.fromList
+        [ (cacheKeyFor request spliceKey, captured)
+        | (spliceKey, captured) <- Map.toList captures
+        ]
+
+-- | Find a cached expansion for the request.
+--
+-- Annotation-wrapper requests can have synthetic cross-side spans after textual
+-- declaration replay, so they retain the same single-wrapper fallback used for
+-- freshly captured module results.
+selectCachedSplice :: SpliceRequest -> CachedSplices -> Maybe SpliceResult
+selectCachedSplice request cache =
+  case Map.lookup (requestCacheKey request) cache of
+    Just captured ->
+      Just (capturedSpliceResult captured)
+    Nothing ->
+      selectCachedAnnotationWrapperFallback request cache
+
+-- | Fallback for annotation wrappers cached from a previous whole-module load.
+selectCachedAnnotationWrapperFallback :: SpliceRequest -> CachedSplices -> Maybe SpliceResult
+selectCachedAnnotationWrapperFallback request cache
+  | requestSpliceKind request /= AnnotationWrapperSplice = Nothing
+  | otherwise =
+      case
+        [ capturedSpliceResult captured
+        | (cacheKey, captured) <- Map.toList cache
+        , cacheKeyComponentUnitId cacheKey == requestComponentUnitId request
+        , capturedSpliceKind captured == AnnotationWrapperSplice
+        ]
+      of
+        [spliceResult] -> Just spliceResult
+        _ -> Nothing
 
 -- | Attach module-level replayable effects to each captured splice result.
 attachModuleEffects :: [FilePath] -> [SpliceForeignFile] -> CapturedSplices -> CapturedSplices

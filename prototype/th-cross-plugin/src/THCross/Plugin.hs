@@ -59,7 +59,7 @@ import GHC.Types.SrcLoc
   , srcSpanStartCol
   , srcSpanStartLine
   )
-import GHC.Unit.Module (moduleName, moduleNameString)
+import GHC.Unit.Module (moduleName, moduleNameString, moduleUnitId, unitIdString)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import GHCi.TH.Binary ()
 import System.IO
@@ -176,6 +176,9 @@ loggingMetaHook workerState mode request spliceExpr = do
     spliceModuleName tcGblEnv =
       moduleNameString (moduleName (tcg_mod tcGblEnv))
 
+    spliceComponentUnitId tcGblEnv =
+      unitIdString (moduleUnitId (tcg_mod tcGblEnv))
+
     spliceKind = metaRequestKind request
     spliceKindName = spliceKindToStr spliceKind
     sourceLoc = getLocA spliceExpr
@@ -189,7 +192,7 @@ loggingMetaHook workerState mode request spliceExpr = do
       case mode of
         WorkerMode workerPath hostPackageIds hostSourceDirs -> do
           spliceResult <-
-            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds hostSourceDirs
+            requestWorker workerState workerPath (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds hostSourceDirs
           replayDependentFiles (spliceResultDependentFiles spliceResult)
           replayForeignFiles (spliceResultForeignFiles spliceResult)
           replayAddedTopDecls (spliceResultAddedTopDecls spliceResult)
@@ -202,7 +205,7 @@ loggingMetaHook workerState mode request spliceExpr = do
       case mode of
         WorkerMode workerPath hostPackageIds hostSourceDirs -> do
           spliceResult <-
-            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds hostSourceDirs
+            requestWorker workerState workerPath (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds hostSourceDirs
           replayDependentFiles (spliceResultDependentFiles spliceResult)
           replayForeignFiles (spliceResultForeignFiles spliceResult)
           replayDiagnostics (spliceResultDiagnostics spliceResult)
@@ -230,7 +233,7 @@ loggingMetaHook workerState mode request spliceExpr = do
       case mode of
         WorkerMode workerPath hostPackageIds hostSourceDirs -> do
           spliceResult <-
-            requestWorker workerState workerPath (spliceModuleName tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds hostSourceDirs
+            requestWorker workerState workerPath (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr hostPackageIds hostSourceDirs
           replayDependentFiles (spliceResultDependentFiles spliceResult)
           replayForeignFiles (spliceResultForeignFiles spliceResult)
           replayAddedTopDecls (spliceResultAddedTopDecls spliceResult)
@@ -325,6 +328,7 @@ metaRequestKind = \case
 -- textual generated Haskell.
 mkSpliceRequest ::
   String ->
+  String ->
   SpliceKind ->
   SrcSpan ->
   String ->
@@ -333,11 +337,12 @@ mkSpliceRequest ::
   [String] ->
   [FilePath] ->
   SpliceRequest
-mkSpliceRequest spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs =
+mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs =
   let (sourceFile, protocolSpan) = protocolSourceSpan sourceLoc
    in SpliceRequest
         { requestId = spliceModuleName <> ":" <> spliceKindToStr spliceKind <> ":" <> renderedSpan
         , requestModuleName = spliceModuleName
+        , requestComponentUnitId = componentUnitId
         , requestSourceFile = sourceFile
         , requestSpliceKind = spliceKind
         , requestSourceSpan = protocolSpan
@@ -377,6 +382,7 @@ requestWorker ::
   WorkerState ->
   FilePath ->
   String ->
+  String ->
   SpliceKind ->
   SrcSpan ->
   String ->
@@ -385,9 +391,9 @@ requestWorker ::
   [String] ->
   [FilePath] ->
   TcM SpliceResult
-requestWorker workerState workerPath spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs = do
+requestWorker workerState workerPath spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs = do
   let workerRequest =
-        mkSpliceRequest spliceModuleName spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs
+        mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs
   liftIO $ putStrLn ("worker: " <> workerPath)
   callWorker workerState workerPath workerRequest >>= \case
     Left err -> do
