@@ -232,76 +232,51 @@ EOF
               };
         };
 
+      # Validate that the host worker package DB chosen during Nix evaluation
+      # matches the external package dependencies Cabal resolved for this
+      # package during `Setup configure`.
+      #
+      # `expectedHostPackageNames` comes from nixpkgs' evaluation-time
+      # `getCabalDeps` metadata and is used to build the host GHC 9.8.4 package
+      # environment.
+      #
+      # `excludedPackageNames` contains package names that may appear in
+      # Cabal's configured component graph but must not be installed as external
+      # worker dependencies, such as the package's own internal library.
       cabalContextValidationScript =
         expectedHostPackageNames:
         excludedPackageNames:
         ''
-          cat > dump-cabal-component-deps.hs <<'EOF'
-import Distribution.Simple.Configure (getPersistBuildConfig)
-import Distribution.Simple.LocalBuildInfo (allComponentsInBuildOrder)
-import Distribution.Types.ComponentLocalBuildInfo
-  (componentLocalName, componentPackageDeps)
-import Distribution.Types.ComponentName (showComponentName)
-import Distribution.Types.MungedPackageId (mungedName)
-import Distribution.Types.MungedPackageName (encodeCompatPackageName)
-import Distribution.Types.PackageName (unPackageName)
-import Distribution.Types.UnitId (unUnitId)
-
-main :: IO ()
-main = do
-  localBuildInfo <- getPersistBuildConfig "dist"
-  mapM_ printComponent (allComponentsInBuildOrder localBuildInfo)
-
-printComponent component = do
-  putStrLn ("component " <> showComponentName (componentLocalName component))
-  mapM_ printDependency (componentPackageDeps component)
-
-printDependency (unitId, packageId) =
-  putStrLn
-    ( "  "
-        <> unPackageName (encodeCompatPackageName (mungedName packageId))
-        <> " "
-        <> unUnitId unitId
-    )
-EOF
-
           mkdir -p "$out/nix-support"
+          cabal_component_deps="$out/nix-support/cabal-component-deps"
+          expected_packages="$out/nix-support/nix-derived-host-package-names"
+          excluded_packages="$out/nix-support/excluded-host-package-names"
+
           ${pkgs.haskell.compiler.ghc9103}/bin/ghc \
             -v0 \
             -package Cabal \
-            --make dump-cabal-component-deps.hs \
+            --make ${../../../nix/tools/dump-cabal-component-deps.hs} \
             -o dump-cabal-component-deps
 
           ./dump-cabal-component-deps \
-            > "$out/nix-support/cabal-component-deps"
+            > "$cabal_component_deps"
 
-          cat > "$out/nix-support/nix-derived-host-package-names" <<'EOF'
+          cat > "$expected_packages" <<'EOF'
 ${pkgs.lib.concatStringsSep "\n" expectedHostPackageNames}
 EOF
 
-          cat > "$out/nix-support/excluded-host-package-names" <<'EOF'
+          cat > "$excluded_packages" <<'EOF'
 base
 template-haskell
 ${pkgs.lib.concatStringsSep "\n" excludedPackageNames}
 EOF
 
-          awk '/^  / { print $1 }' "$out/nix-support/cabal-component-deps" \
-            | { grep -F -x -v -f "$out/nix-support/excluded-host-package-names" || true; } \
-            | sort -u \
-            > "$out/nix-support/cabal-derived-package-names"
-
-          sed '/^$/d' "$out/nix-support/nix-derived-host-package-names" \
-            | sort -u \
-            > "$out/nix-support/nix-derived-host-package-names.sorted"
-
-          if ! diff -u \
-            "$out/nix-support/nix-derived-host-package-names.sorted" \
-            "$out/nix-support/cabal-derived-package-names" \
-            > "$out/nix-support/package-name-diff"; then
-            echo "Nix-derived host package names differ from Cabal setup-config package names" >&2
-            cat "$out/nix-support/package-name-diff" >&2
-            exit 1
-          fi
+          ${pkgs.bash}/bin/bash \
+            ${../../../nix/tools/validate-cabal-component-deps.sh} \
+            "$cabal_component_deps" \
+            "$expected_packages" \
+            "$excluded_packages" \
+            "$out/nix-support"
         '';
 
       appendCabalSourceDirsToPluginOptions =
