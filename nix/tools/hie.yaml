@@ -1,0 +1,8 @@
+cradle:
+  cabal:
+    - path: "app/dump-cabal-source-dirs"
+      component: "exe:dump-cabal-source-dirs"
+    - path: "app/dump-cabal-cpp-options"
+      component: "exe:dump-cabal-cpp-options"
+    - path: "app/validate-cabal-component-context"
+      component: "exe:validate-cabal-component-context"

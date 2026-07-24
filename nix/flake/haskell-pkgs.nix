@@ -52,9 +52,11 @@ let
         };
     };
   };
+
+  nixTools = pkgs.haskell.packages.ghc9103.callPackage ../th-cross-nix-tools.nix { };
 in
 {
-  inherit hostHaskellPkgs consumerGhc9103HaskellPkgs consumerGhc948HaskellPkgs;
+  inherit hostHaskellPkgs consumerGhc9103HaskellPkgs consumerGhc948HaskellPkgs nixTools;
 
   consumerGhc9103 = consumerGhc9103HaskellPkgs.ghcWithPackages (hpkgs: [
     hpkgs.th-cross-plugin

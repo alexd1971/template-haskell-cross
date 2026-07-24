@@ -9,21 +9,25 @@
         set -euo pipefail
 
         mkdir -p nix/generated
+        cd nix/generated
 
-        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-cross-plugin \
-          > nix/generated/th-cross-plugin.nix
+        ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-cross-plugin \
+          > th-cross-plugin.nix
 
-        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-host-worker \
-          > nix/generated/th-host-worker.nix
+        ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-host-worker \
+          > th-host-worker.nix
 
-        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-consumer-example \
-          > nix/generated/th-consumer-example.nix
+        ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-consumer-example \
+          > th-consumer-example.nix
 
-        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-microlens-consumer \
-          > nix/generated/th-microlens-consumer.nix
+        ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-microlens-consumer \
+          > th-microlens-consumer.nix
 
-        ${pkgs.cabal2nix}/bin/cabal2nix prototype/th-executable-consumer \
-          > nix/generated/th-executable-consumer.nix
+        ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-executable-consumer \
+          > th-executable-consumer.nix
+
+        ${pkgs.cabal2nix}/bin/cabal2nix ../../nix/tools \
+          > th-cross-nix-tools.nix
       '';
     in
     {

@@ -46,6 +46,7 @@ in
       consumer-ghc9103-ghc = hs.consumerGhc9103;
       consumer-ghc948-ghc = hs.consumerGhc948;
       consumer-ghc9103-package = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
+      th-cross-nix-tools = hs.nixTools;
       aarch64-linux-cross-probe = aarch64LinuxCrossProbe;
       default = hs.hostHaskellPkgs.th-host-worker;
     }

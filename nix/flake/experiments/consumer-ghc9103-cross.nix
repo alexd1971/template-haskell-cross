@@ -81,13 +81,7 @@ EOF
 
         export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-        ${pkgs.haskell.compiler.ghc9103}/bin/ghc \
-          -v0 \
-          -package Cabal \
-          --make ${../../../nix/tools/dump-cabal-cpp-options.hs} \
-          -o dump-cabal-cpp-options
-
-        ./dump-cabal-cpp-options \
+        ${hs.nixTools}/bin/dump-cabal-cpp-options \
           > th-cross-cabal-cpp-options
 
         plugin_options="[\"worker=${worker}\""
@@ -248,18 +242,8 @@ EOF
         excludedPackageNames:
         ''
           mkdir -p "$out/nix-support"
-          cabal_component_deps="$out/nix-support/cabal-component-deps"
           expected_packages="$out/nix-support/nix-derived-host-package-names"
           excluded_packages="$out/nix-support/excluded-host-package-names"
-
-          ${pkgs.haskell.compiler.ghc9103}/bin/ghc \
-            -v0 \
-            -package Cabal \
-            --make ${../../../nix/tools/dump-cabal-component-deps.hs} \
-            -o dump-cabal-component-deps
-
-          ./dump-cabal-component-deps \
-            > "$cabal_component_deps"
 
           cat > "$expected_packages" <<'EOF'
 ${pkgs.lib.concatStringsSep "\n" expectedHostPackageNames}
@@ -271,9 +255,7 @@ template-haskell
 ${pkgs.lib.concatStringsSep "\n" excludedPackageNames}
 EOF
 
-          ${pkgs.bash}/bin/bash \
-            ${../../../nix/tools/validate-cabal-component-deps.sh} \
-            "$cabal_component_deps" \
+          ${hs.nixTools}/bin/validate-cabal-component-context \
             "$expected_packages" \
             "$excluded_packages" \
             "$out/nix-support"
@@ -281,13 +263,7 @@ EOF
 
       appendCabalSourceDirsToPluginOptions =
         ''
-          ${pkgs.haskell.compiler.ghc9103}/bin/ghc \
-            -v0 \
-            -package Cabal \
-            --make ${../../../nix/tools/dump-cabal-source-dirs.hs} \
-            -o dump-cabal-source-dirs
-
-          ./dump-cabal-source-dirs \
+          ${hs.nixTools}/bin/dump-cabal-source-dirs \
             > th-cross-cabal-source-dirs
 
           while IFS= read -r source_dir; do
@@ -299,13 +275,7 @@ EOF
 
       appendCabalCppOptionsToPluginOptions =
         ''
-          ${pkgs.haskell.compiler.ghc9103}/bin/ghc \
-            -v0 \
-            -package Cabal \
-            --make ${../../../nix/tools/dump-cabal-cpp-options.hs} \
-            -o dump-cabal-cpp-options
-
-          ./dump-cabal-cpp-options \
+          ${hs.nixTools}/bin/dump-cabal-cpp-options \
             > th-cross-cabal-cpp-options
 
           while IFS= read -r cpp_option; do
