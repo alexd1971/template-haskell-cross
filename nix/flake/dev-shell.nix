@@ -23,14 +23,6 @@ let
     exec ${hs.consumerGhc9103}/bin/ghc-pkg "$@"
   '';
 
-  ghc948Wrapper = pkgs.writeShellScriptBin "ghc-9.4.8" ''
-    exec ${hs.consumerGhc948}/bin/ghc "$@"
-  '';
-
-  ghc948PkgWrapper = pkgs.writeShellScriptBin "ghc-9.4.8-pkg" ''
-    exec ${hs.consumerGhc948}/bin/ghc-pkg "$@"
-  '';
-
   thCrossBuild = pkgs.writeShellScriptBin "th-cross-build" ''
     set -euo pipefail
 
@@ -85,8 +77,6 @@ pkgs.mkShell {
     ghc984Wrapper
     ghc984PkgWrapper
     ghc984DefaultPkgWrapper
-    ghc948Wrapper
-    ghc948PkgWrapper
     ghc9103Wrapper
     ghc9103PkgWrapper
     thCrossBuild
@@ -106,7 +96,6 @@ TH cross dev shell
 
 Compilers:
   ghc-9.8.4       host worker / normal prototype build
-  ghc-9.4.8       consumer-side plugin compatibility checks
   ghc-9.10.3      consumer-side plugin compatibility checks
 
 Helpers:

@@ -163,7 +163,7 @@ This early probe led to two branches:
 
 The current successful Nix path is documented in `docs/nix-integration.md`.
 
-See `docs/ghc-9.4.8-consumer-plugin.md` for the first consumer-side GHC 9.4.8
+See `docs/cross-version.md` for the GHC 9.4.8
 API check. The plugin library now builds natively with GHC 9.4.8 through:
 
 ```bash
@@ -750,33 +750,8 @@ compileExit=0
 status=ok
 ```
 
-The current minimal successful GHC-side patch set for this experiment is:
-
-```text
-nix/patches/ghc-9.10.3-force-compiler-internal-interpreter.patch:
-  make CPP-Options: -DHAVE_INTERNAL_INTERPRETER unconditional for the compiler
-  package used by the running cross-GHC.
-
-hadrian flags:
-  stage0.ghc-bin.ghc.link.opts += -optl-Wl,--export-dynamic
-
-nix/patches/ghc-9.10.3-ignore-empty-th-finalizers.patch:
-  ignore addModFinalizersWithLclEnv (ThModFinalizers []).
-```
-
-This patch set is the current smallest documented GHC-side shape that passes the
-direct worker smoke and the Setup-based Cabal package smoke in this repository.
-Future work is to decide which parts are upstreamable and whether the same shape
-can be integrated through nixpkgs' Haskell generic builder. Remaining fallback
-options, if later cases require more than the current minimal patch set, are
-more invasive:
-
-```text
-force the relevant internal-interpreter Cabal flag/CPP path in the GHC build;
-or patch loadExternalPlugins / plugin loading directly;
-or link the THCross hook into a custom GHC executable instead of loading it as
-an external plugin.
-```
+The final working patch set and its upstream status are documented in
+`docs/ghc-cross-patches.md`.
 
 ### Internal Static Plugin Or Patched GHC Main
 

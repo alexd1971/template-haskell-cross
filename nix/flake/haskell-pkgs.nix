@@ -2,7 +2,7 @@
 
 let
   # This file contains only Haskell package-set wiring. Cross-GHC experiments
-  # live under `experiments/`; reusable experiment builders live in `lib.nix`.
+  # live under `experiments/`.
 
   # Native host-side package set. The worker must run on the build host and
   # currently targets GHC 9.8.4 because the first prototype is tied to that GHC
@@ -39,30 +39,12 @@ let
     };
   };
 
-  # Native build-host package set for a GHC 9.4.8 consumer/cross compiler. A GHC
-  # plugin is loaded into the compiler process, so it must be built for the
-  # build host architecture, but against the same GHC API version as the
-  # compiler that loads it.
-  consumerGhc948HaskellPkgs = pkgs.haskell.packages.ghc948.override {
-    overrides = selfH: superH: {
-      th-cross-plugin =
-        pkgs.callPackage ../th-cross-plugin.nix {
-          callPackage = selfH.callPackage;
-          haskellLib = pkgs.haskell.lib;
-        };
-    };
-  };
-
   nixTools = pkgs.haskell.packages.ghc9103.callPackage ../th-cross-nix-tools.nix { };
 in
 {
-  inherit hostHaskellPkgs consumerGhc9103HaskellPkgs consumerGhc948HaskellPkgs nixTools;
+  inherit hostHaskellPkgs consumerGhc9103HaskellPkgs nixTools;
 
   consumerGhc9103 = consumerGhc9103HaskellPkgs.ghcWithPackages (hpkgs: [
-    hpkgs.th-cross-plugin
-  ]);
-
-  consumerGhc948 = consumerGhc948HaskellPkgs.ghcWithPackages (hpkgs: [
     hpkgs.th-cross-plugin
   ]);
 }

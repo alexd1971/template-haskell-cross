@@ -25,7 +25,6 @@ two roles:
 - `hostHaskellPkgs`: native host-side Haskell package set, currently GHC 9.8.4;
 - `consumerGhc9103HaskellPkgs`: the Haskell package set that consumes
   `THCross.Plugin`, currently native GHC 9.10.3.
-- `consumerGhc948HaskellPkgs`: native GHC 9.4.8 compatibility package set for
   the consumer-side plugin.
 
 The consumer package sets are deliberately named by role and GHC version rather
@@ -44,30 +43,18 @@ be introduced later as a separate target package set.
 ```text
 packages.${system}.host-ghc984-worker
 packages.${system}.host-ghc984-plugin
-packages.${system}.consumer-ghc948-plugin
-packages.${system}.consumer-ghc948-ghc
-packages.${system}.consumer-ghc948-cross-plugin-no-th-smoke
-packages.${system}.consumer-ghc948-cross-worker-smoke
-packages.${system}.consumer-ghc9103-cross-ghc-bootstrapped
-packages.${system}.consumer-ghc9103-cross-ghc-forced-internal-interpreter
-packages.${system}.consumer-ghc9103-cross-plugin-library-bootstrapped-probe
-packages.${system}.consumer-ghc9103-cross-plugin-library-forced-internal-interpreter-probe
-packages.${system}.consumer-ghc9103-cross-worker-smoke
-packages.${system}.consumer-ghc9103-cross-cabal-package
+packages.${system}.cross-ghc9103-aarch64-linux
 packages.${system}.consumer-ghc9103-cross-generic-package
 packages.${system}.consumer-ghc9103-cross-microlens-package
 packages.${system}.consumer-ghc9103-cross-microlens-cabal-context-probe
 packages.${system}.consumer-ghc9103-cross-executable-package
 packages.${system}.consumer-ghc9103-cross-executable-qemu-smoke
-packages.${system}.consumer-ghc9103-cross-plugin-library-probe
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
 packages.${system}.consumer-ghc9103-package
 packages.${system}.aarch64-linux-cross-probe
 checks.${system}.consumer-ghc9103-worker-smoke
 checks.${system}.consumer-ghc9103-package
-checks.${system}.consumer-ghc948-plugin
-checks.${system}.consumer-ghc948-worker-smoke
 checks.${system}.cross-target-probe-aarch64-linux
 devShells.${system}.default
 apps.${system}.regen-cabal-nix
@@ -79,38 +66,9 @@ host architecture:
 - `host-ghc984-worker` comes from `hostHaskellPkgs` and is built with GHC 9.8.4;
 - `host-ghc984-plugin` is the GHC 9.8.4 plugin build used by the local
   prototype;
-- `consumer-ghc948-plugin` is a native GHC 9.4.8 compatibility build for the
-  consumer-side plugin;
-- `consumer-ghc948-ghc` is a GHC 9.4.8 environment containing
-  `th-cross-plugin`;
-- `consumer-ghc948-cross-plugin-no-th-smoke` is an explicit aarch64 cross-GHC
-  plugin-loading smoke test without Template Haskell splices;
-- `consumer-ghc948-cross-worker-smoke` is an explicit aarch64 cross-GHC smoke
-  test with a Template Haskell splice. These cross smoke packages are not part
-  of `flake check`, because they may build the large cross-GHC closure;
-- `consumer-ghc9103-cross-plugin-library-probe` checks whether the plain
-  nixpkgs aarch64 cross-GHC 9.10.3 can load `THCross.Plugin` through
-  `-fplugin-library`. It writes a report instead of failing the derivation,
-  because the current result is an expected blocker;
-- `consumer-ghc9103-cross-ghc-bootstrapped` is an experimental aarch64
-  cross-GHC 9.10.3 built with native GHC 9.10.3 as its bootstrap compiler;
-- `consumer-ghc9103-cross-plugin-library-bootstrapped-probe` runs the same
-  `-fplugin-library` check against `consumer-ghc9103-cross-ghc-bootstrapped`.
-  This tests whether satisfying Hadrian's same-version bootstrap condition is
-  enough to enable the internal interpreter path needed by external static
-  plugins;
-- `consumer-ghc9103-cross-ghc-forced-internal-interpreter` is a second
-  experimental aarch64 cross-GHC 9.10.3. It keeps the same-version bootstrap and
-  forces `HAVE_INTERNAL_INTERPRETER` for the compiler package at Cabal
-  configuration level;
-- `consumer-ghc9103-cross-plugin-library-forced-internal-interpreter-probe`
-  runs the `-fplugin-library` check against that forced build;
-- `consumer-ghc9103-cross-worker-smoke` uses that forced cross-GHC to compile a
-  real expression splice through `THCross.Plugin` and the GHC 9.8.4 host worker;
-- `consumer-ghc9103-cross-cabal-package` copies the checked-in
-  `th-consumer-example` package, runs Cabal's `Setup configure`, `Setup build`,
-  and `Setup copy` with the forced aarch64 cross-GHC, and installs the package
-  output under `$out`;
+- `cross-ghc9103-aarch64-linux` — рабочий кросс-GHC 9.10.3 для
+  `aarch64-linux` с тремя патчами (см. `docs/ghc-cross-patches.md`),
+  поддерживающий загрузку плагина через `-fplugin-library`;
 - `consumer-ghc9103-cross-generic-package` builds the same checked-in
   `th-consumer-example` package through nixpkgs' Haskell generic builder. It
   constructs a target Haskell package set around the patched aarch64 cross-GHC,
@@ -289,51 +247,6 @@ Build the consumer-side plugin with GHC 9.10.3:
 nix build .#consumer-ghc9103-plugin
 ```
 
-Build the consumer-side plugin with GHC 9.4.8:
-
-```bash
-nix build .#consumer-ghc948-plugin
-```
-
-Build the GHC 9.4.8 consumer environment:
-
-```bash
-nix build .#consumer-ghc948-ghc
-```
-
-The same build is also part of:
-
-```bash
-nix flake check
-```
-
-Run the GHC 9.4.8 consumer plugin smoke test against the GHC 9.8.4 worker:
-
-```bash
-nix build .#checks.x86_64-linux.consumer-ghc948-worker-smoke -L
-```
-
-Run the explicit aarch64 cross-GHC 9.4.8 smoke test against the native GHC
-9.4.8 plugin and GHC 9.8.4 worker:
-
-```bash
-nix build .#consumer-ghc948-cross-worker-smoke -L
-```
-
-Run the same cross-GHC/plugin wiring without Template Haskell splices:
-
-```bash
-nix build .#consumer-ghc948-cross-plugin-no-th-smoke -L
-```
-
-These are intentionally packages, not default flake checks. Building them may
-pull in the full plain-nixpkgs aarch64 cross-GHC 9.4.8 closure.
-
-Current result: the correct build-host executable cross-GHC is
-`pkgsCross.aarch64-multiplatform.buildPackages.haskell.compiler.ghc948`.
-Its wrapper reports:
-
-```text
 ("cross compiling","YES")
 ```
 
@@ -358,281 +271,14 @@ Plugins require -fno-external-interpreter
 So the blocker is earlier than `runMetaHook`: this GHC 9.4 cross setup requires
 a target code interpreter just to load/use a GHC plugin.
 
-The source-level analysis and possible workaround paths are recorded in
-`docs/plain-nixpkgs-cross-ghc.md`.
+The source-level analysis and workaround investigation is recorded in
+`docs/plain-nixpkgs-cross-ghc.md`.  The final working patch set and its
+upstream status are documented in `docs/ghc-cross-patches.md`.
 
-Run the explicit aarch64 cross-GHC 9.10.3 `-fplugin-library` probe:
-
-```bash
-nix build .#consumer-ghc9103-cross-plugin-library-probe -L
-cat result
-```
-
-Current result: plain nixpkgs provides an aarch64-producing GHC 9.10.3
-build-host executable, and that executable exposes `-fplugin-library`. The
-probe still cannot load the external static plugin because this GHC package was
-built without the internal interpreter code path needed by
-`GHC.Driver.Plugins.loadExternalPlugins`:
-
-```text
-loadExternalPlugins: can't load external plugins with GHC built without internal interpreter
-```
-
-Build the experimental aarch64 cross-GHC 9.10.3 with same-version bootstrap:
+The patched cross-GHC is built as:
 
 ```bash
-nix build .#consumer-ghc9103-cross-ghc-bootstrapped -L
-```
-
-This output is intentionally separate from the plain nixpkgs cross-GHC. It
-overrides the cross-GHC bootstrap package set to native GHC 9.10.3, so GHC
-reports:
-
-```text
-("Booter version","9.10.3")
-("Stage","1")
-("cross compiling","YES")
-```
-
-Run the `-fplugin-library` probe against that bootstrapped cross-GHC:
-
-```bash
-nix build .#consumer-ghc9103-cross-plugin-library-bootstrapped-probe -L
-cat result
-```
-
-Current result: this confirms the same-version bootstrap shape but still fails
-in `GHC.Driver.Plugins.loadExternalPlugins`:
-
-```text
-("Booter version","9.10.3")
-("Stage","1")
-loadExternalPlugins: can't load external plugins with GHC built without internal interpreter
-```
-
-So the same-version bootstrap condition alone is not sufficient for the tested
-nixpkgs GHC 9.10.3 cross derivation. The next experiment needs to force the
-relevant `internal-interpreter` Cabal flag/CPP path or patch
-`loadExternalPlugins` directly.
-
-Run the forced `internal-interpreter` experiment:
-
-```bash
-nix build .#consumer-ghc9103-cross-plugin-library-forced-internal-interpreter-probe -L
-cat result
-```
-
-This is expected to be a heavy build. It deliberately does not replace the
-plain or bootstrapped probes, because those remain useful as negative controls.
-The first attempt used `hadrianFlags` with `cabal.configure.opts +=
---flags=internal-interpreter`. The build log confirmed those command-line
-settings reached Hadrian, but the resulting compiler still failed with the same
-panic. The likely reason is that Hadrian computes package flags separately via
-the `Cabal Flags` builder and then appends its own final `--flags=...` argument.
-
-The second attempt patched `hadrian/src/Settings/Packages.hs` inside the GHC
-source tree, changing the existing `internal-interpreter` Cabal flag condition
-from:
-
-```text
-ghcWithInterpreter && notStage0
-```
-
-to:
-
-```text
-(ghcWithInterpreter && notStage0) || stage1
-```
-
-That did not affect the build: nixpkgs invokes a prebuilt `hadrian` executable
-from `nativeBuildInputs`, so patching the source copy of Hadrian in the GHC
-source tree does not change Hadrian's already-compiled package rules.
-
-The third attempt used a supported Hadrian user setting for GHC Haskell compile
-options:
-
-```text
-stage1.ghc.ghc.hs.opts += -DHAVE_INTERNAL_INTERPRETER
-```
-
-That setting also reached `hadrianFlags`, but the rebuilt compiler still took
-the same panic branch. The likely reason is again stage naming: the installed
-stage1 cross compiler is built in Hadrian's stage0 context, so the setting did
-not affect the package instance that produced the running compiler.
-
-An intermediate diagnostic patch bypassed the actual source guard in
-`compiler/GHC/Driver/Plugins.hs` and confirmed that the loader path works once
-the guard is passed. The current minimized experiment no longer patches
-`GHC.Driver.Plugins`. Instead, it forces the intended build macro at the Cabal
-configuration level by patching:
-
-```text
-compiler/ghc.cabal.in
-```
-
-from:
-
-```text
-if flag(internal-interpreter)
-    CPP-Options: -DHAVE_INTERNAL_INTERPRETER
-```
-
-to:
-
-```text
-CPP-Options: -DHAVE_INTERNAL_INTERPRETER
-```
-
-`CAN_LOAD_DLL` is not patched. It is already controlled by the `dynamic-system-linker`
-Cabal flag in `compiler/ghc.cabal.in`, and the tested Linux build has it
-enabled:
-
-```text
-if flag(dynamic-system-linker)
-    CPP-Options: -DCAN_LOAD_DLL
-```
-
-With the cabal-level `HAVE_INTERNAL_INTERPRETER` patch, the important question
-is still whether the rebuilt compiler no longer fails with:
-
-```text
-loadExternalPlugins: can't load external plugins with GHC built without internal interpreter
-```
-
-Observed result: the diagnostic patch passes both preprocessor gates and reaches
-the real shared-library loader. The next blocker is now `loadDLL`:
-
-```text
-loadExternalPluginLib
-Can't load plugin library
-  Library path: /nix/store/.../libHSth-cross-plugin-...-ghc9.10.3.so
-  Error       : /nix/store/...-ghc-9.10.3/.../libHSghc-prim-0.12.0-...-ghc9.10.3.so:
-                undefined symbol: stg_gc_unpt_r1
-```
-
-This confirms that `-fplugin-library` can reach the object linker after the GHC
-source guard is bypassed. It also shows that loading a normal GHC plugin shared
-library into this statically linked cross-GHC is not enough: the plugin's native
-GHC package libraries expect RTS symbols that are not available to the loader in
-the current process shape.
-
-The executable contains `stg_gc_unpt_r1` in its normal symbol table, but not in
-its dynamic symbol table. The native RTS shared library also exports that
-symbol.
-
-The first export-dynamic attempt used:
-
-```text
-stage1.ghc-bin.ghc.link.opts += -optl-Wl,--export-dynamic
-```
-
-That did not change the resulting executable's dynamic symbol table. The reason
-is Hadrian's cross-program rule in:
-
-```text
-hadrian/src/Rules/Program.hs
-```
-
-For cross builds, `buildProgram` copies `stage0/bin/<program>` to
-`stage1/bin/<program>` instead of linking the stage1 program directly. Therefore
-the next experiment keeps the diagnostic `GHC.Driver.Plugins` patch but exports
-dynamic symbols from the stage0 `ghc-bin` executable:
-
-```text
-stage0.ghc-bin.ghc.link.opts += -optl-Wl,--export-dynamic
-```
-
-This still mirrors the existing Hadrian rule for `iserv`, whose comment says
-`--export-dynamic` is needed so dynamically loaded objects can refer to RTS
-symbols.
-
-Observed result after applying the linker option to `stage0.ghc-bin`:
-
-```text
-compile NoTH.hs with -fplugin-library:
-
-compileExit=0
-status=ok
-```
-
-This confirms only dynamic plugin loading. It does not yet prove that the
-cross-GHC can compile a TH module through the worker. The next smoke test uses
-the same forced cross-GHC but compiles `Example.hs`:
-
-```bash
-nix build .#consumer-ghc9103-cross-worker-smoke -L
-cat result
-```
-
-First worker-smoke result:
-
-```text
-th-cross: intercepted Template Haskell splice
-th-cross: started worker /nix/store/.../bin/th-host-worker
-th-host-worker: cache miss /nix/store/...-Example.hs
-<no location info>: error:
-    Template haskell requires a target code interpreter
-
-compileExit=1
-status=blocked
-```
-
-This is after the plugin hook and worker path have run. The source-level reason
-is another cross-GHC finalizer edge:
-
-```text
-GHC.Rename.Splice.rnUntypedSpliceExpr
-  -> stores HsUntypedSpliceTop (ThModFinalizers mod_finalizers) expandedExpr
-
-GHC.Tc.Gen.Splice.getUntypedSpliceBody
-  -> addModFinalizersWithLclEnv mod_finalizers
-
-GHC.Tc.Utils.Monad.addModFinalizersWithLclEnv
-  -> stores the finalizer list unconditionally
-
-GHC.Tc.Module.run_th_modfinalizers
-  -> runRemoteModFinalizers
-
-GHC.Tc.Gen.Splice.runRemoteModFinalizers
-  -> tcGetInterp, even for ThModFinalizers []
-```
-
-For the simple `Example.hs` splice there are no module finalizers. The forced
-cross-GHC experiment now applies a second diagnostic patch:
-
-```haskell
-addModFinalizersWithLclEnv (ThModFinalizers []) = pure ()
-addModFinalizersWithLclEnv mod_finalizers = ...
-```
-
-This preserves non-empty finalizers but avoids requiring a target interpreter
-for an empty finalizer list produced by an already-expanded untyped splice.
-
-Observed result after replacing the direct `GHC.Driver.Plugins` guard patch with
-the cabal-level `HAVE_INTERNAL_INTERPRETER` patch and adding the empty-finalizer
-patch:
-
-```text
-compile Example.hs with -fplugin-library and host worker:
-th-cross: intercepted Template Haskell splice
-module: Example
-kind: expression
-worker: /nix/store/.../bin/th-host-worker
-th-cross: started worker /nix/store/.../bin/th-host-worker
-th-host-worker: cache miss /nix/store/...-Example.hs
-
-compileExit=0
-status=ok
-```
-
-This is the current minimal successful cross smoke for the Nix experiment. It
-does not patch `GHC.Driver.Plugins` directly.
-
-The GHC source edits are kept as reviewable patch files:
-
-```text
-nix/patches/ghc-9.10.3-force-compiler-internal-interpreter.patch
-nix/patches/ghc-9.10.3-ignore-empty-th-finalizers.patch
+nix build .#cross-ghc9103-aarch64-linux
 ```
 
 Build the consumer GHC environment:
@@ -647,14 +293,7 @@ Build the package-level consumer example:
 nix build .#consumer-ghc9103-package
 ```
 
-Run the aarch64 cross-GHC Cabal package smoke:
-
-```bash
-nix build .#consumer-ghc9103-cross-cabal-package
-cat result/nix-support/build-log
-```
-
-Run the same package through nixpkgs' Haskell generic builder:
+Run the package through nixpkgs' Haskell generic builder:
 
 ```bash
 nix build .#consumer-ghc9103-cross-generic-package -L --allow-import-from-derivation
@@ -880,32 +519,6 @@ Observed cross-probe output:
 buildPlatform=x86_64-unknown-linux-gnu
 targetHostPlatform=aarch64-unknown-linux-gnu
 nativeHostGhc=9.8.4
-crossGhc948=9.4.8
-targetSideGhc948Compiler=ghc-aarch64-unknown-linux-gnu-9.4.8
-buildHostCrossGhc948Compiler=aarch64-unknown-linux-gnu-ghc-9.4.8
-consumerPluginShape=native build-host plugin built by consumer-ghc948-plugin
-crossGhc984Status=unsupported by plain nixpkgs cross set: GHC >= 9.6 can't be cross-compiled here
-nextStep=run consumer-ghc948-cross-worker-smoke to test cross-GHC plus native same-version plugin plus GHC 9.8.4 worker
-```
-
-This check is intentionally not a Haskell cross build. It records the current
-plain nixpkgs limitation: evaluating cross GHC 9.8.4 in
-`pkgsCross.aarch64-multiplatform` fails with nixpkgs' own
-`GHC >= 9.6 can't be cross-compiled` error. The useful parts for the prototype
-are:
-
-- `buildPackages` still provides a native GHC 9.8.4 side, which is the right
-  place for the host worker;
-- plain nixpkgs exposes an aarch64-producing GHC 9.4.8 package set;
-- the plugin should come from the native GHC 9.4.8 package set, because
-  `-fplugin` loads code into the cross-GHC process running on the build host.
-- the executable compiler for this smoke test comes from
-  `pkgsCross.aarch64-multiplatform.buildPackages.haskell.compiler.ghc948`, not
-  from `pkgsCross.aarch64-multiplatform.haskell.compiler.ghc948`.
-
-The explicit `consumer-ghc948-cross-worker-smoke` package tests that wiring by
-running the aarch64 cross-GHC with the native GHC 9.4.8 plugin package DB and
-the native GHC 9.8.4 worker.
 
 See `docs/plain-nixpkgs-cross-ghc.md` for the plain nixpkgs cross-GHC
 investigation.

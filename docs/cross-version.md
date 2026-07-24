@@ -1,19 +1,17 @@
 # Cross-Version Host/Consumer GHC Test
 
-This document records the first plugin-based cross-version test for the TH cross
+This document records plugin-based cross-version tests for the TH cross
 prototype.
 
 ## Goal
 
 Verify that the host worker and the consumer compiler do not have to use the
-same GHC version when the wire format is textual Haskell:
+same GHC version when the wire format is textual Haskell.  Two version pairs
+have been tested:
 
 ```text
-consumer GHC 9.10.2
-  -> THCross.Plugin runMetaHook
-  -> host worker built with GHC 9.8.4
-  -> generated Haskell text
-  -> consumer GHC 9.10.2 parses the text locally
+consumer GHC 9.10.x → host worker GHC 9.8.4   (primary path)
+consumer GHC 9.4.8  → host worker GHC 9.8.4   (additional confirmation)
 ```
 
 The main expression-splice test intentionally does not transfer:
@@ -38,9 +36,9 @@ prototype/cross-version-plugin-test/run.sh
 It does the following:
 
 1. Builds `th-host-worker` with `ghc-9.8.4`.
-2. Builds `th-cross-plugin` with `ghc-9.10.2`.
+2. Builds `th-cross-plugin` with the consumer GHC.
 3. Compiles `prototype/th-cross-plugin/test/fixtures/Example.hs` with
-   `ghc-9.10.2`.
+   the consumer GHC.
 4. Passes the GHC 9.8.4 worker path through
    `-fplugin-opt=THCross.Plugin:worker=...`.
 
@@ -64,7 +62,9 @@ FIXTURE=AnnotationInt.hs prototype/cross-version-plugin-test/run.sh
 FIXTURE=AnnotationInt.hs EXPECT_EXIT=failure prototype/cross-version-plugin-test/run.sh
 ```
 
-## Observed Output
+## GHC 9.10.2 Consumer
+
+### Observed Output
 
 The manual run produced:
 
@@ -75,32 +75,70 @@ kind: expression
 splice-key: db5b38a182e7327256576d7231cf0980
 location: prototype/th-cross-plugin/test/fixtures/Example.hs:6:8-17
 expression: ([| 42 |])
-worker: /home/alexey/Projects/flutter-bridges/th-cross/prototype/dist-newstyle/build/x86_64-linux/ghc-9.8.4/th-host-worker-0.1.0.0/x/th-host-worker/build/th-host-worker/th-host-worker
-th-cross: started worker /home/alexey/Projects/flutter-bridges/th-cross/prototype/dist-newstyle/build/x86_64-linux/ghc-9.8.4/th-host-worker-0.1.0.0/x/th-host-worker/build/th-host-worker/th-host-worker
+worker: …/th-host-worker/build/th-host-worker/th-host-worker
+th-cross: started worker …/th-host-worker/build/th-host-worker/th-host-worker
 th-host-worker: cache miss prototype/th-cross-plugin/test/fixtures/Example.hs
 ```
 
 This confirms that the consumer-side plugin was loaded by GHC 9.10.2 and that
 splice evaluation was delegated to a worker built with GHC 9.8.4.
 
-## Cabal Bounds
+## GHC 9.4.8 Consumer (native only)
 
-The plugin library is now allowed to build against both GHC 9.8 and GHC 9.10:
+A second cross-version check was performed with GHC 9.4.8 as the consumer
+compiler.  At the time, plain nixpkgs did not provide cross GHC 9.8.4 for
+`pkgsCross.aarch64-multiplatform`, but it did evaluate cross GHC 9.4.8.
+The question was whether the plugin could be built against GHC 9.4.8 and
+whether the cross-version protocol held.
 
-```cabal
-base >= 4.19 && < 4.22
-ghc >= 9.8 && < 9.11
-ghc-boot >= 9.8 && < 9.11
+### API Compatibility
+
+GHC 9.4.8 exposes `runMetaHook` with the same `MetaHook` shape as 9.8.4.
+All basic `MetaRequest` constructors (`MetaE`, `MetaP`, `MetaT`, `MetaD`,
+`MetaAW`) are present.  The fragment parser entrypoints are also available.
+Two minor differences required `CPP` in the plugin:
+
+- `LangJs` does not exist in GHC 9.4.8's `ForeignSrcLang`;
+- diagnostics forwarding uses `TcRnUnknownMessage` instead of the GHC 9.8+
+  `TcRnTHError`/`ReportCustomQuasiError` constructors.
+
+### Result
+
+The native cross-version smoke test passed: GHC 9.4.8 loaded
+`THCross.Plugin`, delegated to the GHC 9.8.4 worker, and the worker
+returned a textual fragment that GHC 9.4.8 parsed successfully.
+
+This confirmed the textual-fragment protocol with a second version pair.
+
+### Cross-Compilation Blocked
+
+The cross-GHC 9.4.8 path is blocked: the plain-nixpkgs GHC 9.4.8 cross
+compiler does not expose `-fplugin-library`, and the normal `-fplugin` path
+requires a target interpreter that is unavailable.  See
+`docs/plain-nixpkgs-cross-ghc.md` for the full investigation.
+
+```text
+GHC 9.4.8 native consumer:   works
+GHC 9.4.8 cross compiler:    blocked (no -fplugin-library, no interpreter)
 ```
 
-The host worker remains pinned to GHC 9.8.4. This is intentional: Task 19 is
-about a GHC 9.8.4 host-side evaluator serving a different consumer GHC.
+## Cabal Bounds
+
+The plugin library is built against GHC 9.8, 9.10, and 9.4:
+
+```cabal
+base >= 4.17 && < 4.22
+ghc >= 9.4 && < 9.11
+ghc-boot >= 9.4 && < 9.11
+```
+
+The host worker remains pinned to GHC 9.8.4.
 
 ## Scope
 
 Confirmed:
 
-- expression splice interception by a GHC 9.10.2 plugin;
+- expression splice interception by GHC 9.10.2 and 9.4.8 plugins;
 - request/response with a GHC 9.8.4 worker;
 - textual generated Haskell as the cross-version boundary;
 - local parsing by the consumer GHC.
@@ -143,11 +181,11 @@ th-cross: intercepted Template Haskell splice
 module: AnnotationInt
 kind: annotation-wrapper
 splice-key: de2aaf5118279fb85eb157a3d932825b
-location: /home/alexey/Projects/flutter-bridges/th-cross/prototype/th-cross-plugin/test/fixtures/AnnotationInt.hs:5:1-30
+location: …/th-cross-plugin/test/fixtures/AnnotationInt.hs:5:1-30
 expression: toAnnotationWrapper (42 :: Int)
-worker: /home/alexey/Projects/flutter-bridges/th-cross/prototype/dist-newstyle/build/x86_64-linux/ghc-9.8.4/th-host-worker-0.1.0.0/x/th-host-worker/build/th-host-worker/th-host-worker
-th-cross: started worker /home/alexey/Projects/flutter-bridges/th-cross/prototype/dist-newstyle/build/x86_64-linux/ghc-9.8.4/th-host-worker-0.1.0.0/x/th-host-worker/build/th-host-worker/th-host-worker
-th-host-worker: cache miss /home/alexey/Projects/flutter-bridges/th-cross/prototype/th-cross-plugin/test/fixtures/AnnotationInt.hs
+worker: …/th-host-worker/build/th-host-worker/th-host-worker
+th-cross: started worker …/th-host-worker/build/th-host-worker/th-host-worker
+th-host-worker: cache miss …/th-cross-plugin/test/fixtures/AnnotationInt.hs
 host GHC: 9.8.4
 consumer GHC: 9.10.2
 fixture: AnnotationInt.hs
@@ -161,11 +199,11 @@ th-cross: intercepted Template Haskell splice
 module: AnnotationCustom
 kind: annotation-wrapper
 splice-key: 91888abb09a493c1f4c3cb9c658e1521
-location: /home/alexey/Projects/flutter-bridges/th-cross/prototype/th-cross-plugin/test/fixtures/AnnotationCustom.hs:7:1-38
+location: …/th-cross-plugin/test/fixtures/AnnotationCustom.hs:7:1-38
 expression: toAnnotationWrapper (Ann "th-cross" 42)
-worker: /home/alexey/Projects/flutter-bridges/th-cross/prototype/dist-newstyle/build/x86_64-linux/ghc-9.8.4/th-host-worker-0.1.0.0/x/th-host-worker/build/th-host-worker/th-host-worker
-th-cross: started worker /home/alexey/Projects/flutter-bridges/th-cross/prototype/dist-newstyle/build/x86_64-linux/ghc-9.8.4/th-host-worker-0.1.0.0/x/th-host-worker/build/th-host-worker/th-host-worker
-th-host-worker: cache miss /home/alexey/Projects/flutter-bridges/th-cross/prototype/th-cross-plugin/test/fixtures/AnnotationCustom.hs
+worker: …/th-host-worker/build/th-host-worker/th-host-worker
+th-cross: started worker …/th-host-worker/build/th-host-worker/th-host-worker
+th-host-worker: cache miss …/th-cross-plugin/test/fixtures/AnnotationCustom.hs
 host GHC: 9.8.4
 consumer GHC: 9.10.2
 fixture: AnnotationCustom.hs
