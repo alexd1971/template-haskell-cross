@@ -142,7 +142,7 @@ exposure through plugin options:
 -fplugin-opt=THCross.Plugin:host-package-id=microlens-th-0.4.3.17-...
 ```
 
-The plugin serializes these unit ids into the JSON-lines splice request as
+The plugin serializes these unit ids into the binary-framed splice request as
 `hostPackageIds`. The worker turns them into host-side `-package-id` flags
 before loading the source module. `TH_HOST_GHC_PACKAGE_IDS` is accepted as an
 environment-variable fallback for manual experiments, but the preferred

@@ -9,10 +9,7 @@ module THCross.SpliceKey
   , unSpliceKey
   ) where
 
-import Data.Aeson
-  ( FromJSON (..)
-  , ToJSON (..)
-  )
+import Data.Binary (Binary (..))
 import GHC.Fingerprint (fingerprintString)
 
 -- | Opaque identity for one Template Haskell source splice occurrence.
@@ -25,13 +22,11 @@ newtype SpliceKey = SpliceKey
   }
   deriving (Eq, Ord, Show)
 
-instance ToJSON SpliceKey where
-  toJSON =
-    toJSON . unSpliceKey
-
-instance FromJSON SpliceKey where
-  parseJSON value =
-    SpliceKey <$> parseJSON value
+instance Binary SpliceKey where
+  put =
+    put . unSpliceKey
+  get =
+    SpliceKey <$> get
 
 -- | Build a splice key from source occurrence metadata.
 mkSpliceKey :: String -> String -> String -> SpliceKey

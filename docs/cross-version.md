@@ -1,17 +1,33 @@
-# Cross-Version Host/Consumer GHC Test
+# Legacy Cross-Version Textual Protocol
 
-This document records plugin-based cross-version tests for the TH cross
-prototype.
+This document records historical plugin-based cross-version tests for the
+textual-result TH cross prototype.
+
+This is no longer the production direction. The current production direction is
+a same-GHC protocol that transports binary-encoded Template Haskell AST values
+instead of pretty-printed Haskell source. Cross-version textual transport remains
+useful context for understanding earlier design choices, but it is now legacy.
+
+Current status:
+
+```text
+supported plugin GHCs: 9.8 <= GHC < 9.11
+active consumer GHC:   9.10.3
+active worker GHC:     9.8.4
+current payload:       textual generated Haskell over binary framing
+planned payload:       same-GHC Binary Template Haskell AST
+cross-version support: legacy/transitional, not a production goal
+```
 
 ## Goal
 
-Verify that the host worker and the consumer compiler do not have to use the
-same GHC version when the wire format is textual Haskell.  Two version pairs
-have been tested:
+The original goal was to verify that the host worker and the consumer compiler
+did not have to use the same GHC version when the wire format was textual
+Haskell. The currently supported plugin API baseline is GHC 9.8, so older
+consumer compilers are no longer supported by the plugin package.
 
 ```text
-consumer GHC 9.10.x → host worker GHC 9.8.4   (primary path)
-consumer GHC 9.4.8  → host worker GHC 9.8.4   (additional confirmation)
+consumer GHC 9.10.x → host worker GHC 9.8.4   (legacy textual path)
 ```
 
 The main expression-splice test intentionally does not transfer:
@@ -62,11 +78,11 @@ FIXTURE=AnnotationInt.hs prototype/cross-version-plugin-test/run.sh
 FIXTURE=AnnotationInt.hs EXPECT_EXIT=failure prototype/cross-version-plugin-test/run.sh
 ```
 
-## GHC 9.10.2 Consumer
+## GHC 9.10.x Consumer
 
 ### Observed Output
 
-The manual run produced:
+A manual GHC 9.10.2 run produced:
 
 ```text
 th-cross: intercepted Template Haskell splice
@@ -80,16 +96,21 @@ th-cross: started worker …/th-host-worker/build/th-host-worker/th-host-worker
 th-host-worker: cache miss prototype/th-cross-plugin/test/fixtures/Example.hs
 ```
 
-This confirms that the consumer-side plugin was loaded by GHC 9.10.2 and that
-splice evaluation was delegated to a worker built with GHC 9.8.4.
+This confirmed that the consumer-side plugin could be loaded by a GHC 9.10.x
+compiler and that splice evaluation could be delegated to a worker built with
+GHC 9.8.4. The active Nix consumer compiler is now GHC 9.10.3.
 
-## GHC 9.4.8 Consumer (native only)
+## Historical GHC 9.4.8 Consumer Probe
 
-A second cross-version check was performed with GHC 9.4.8 as the consumer
+A previous cross-version check was performed with GHC 9.4.8 as the consumer
 compiler.  At the time, plain nixpkgs did not provide cross GHC 9.8.4 for
 `pkgsCross.aarch64-multiplatform`, but it did evaluate cross GHC 9.4.8.
 The question was whether the plugin could be built against GHC 9.4.8 and
 whether the cross-version protocol held.
+
+This path is now historical. The plugin package intentionally requires
+`ghc >= 9.8` to remove compatibility CPP from production code and to prepare
+for the same-GHC raw Template Haskell AST protocol.
 
 ### API Compatibility
 
@@ -124,12 +145,12 @@ GHC 9.4.8 cross compiler:    blocked (no -fplugin-library, no interpreter)
 
 ## Cabal Bounds
 
-The plugin library is built against GHC 9.8, 9.10, and 9.4:
+The plugin library is built against GHC 9.8 and 9.10:
 
 ```cabal
-base >= 4.17 && < 4.22
-ghc >= 9.4 && < 9.11
-ghc-boot >= 9.4 && < 9.11
+base >= 4.19 && < 4.22
+ghc >= 9.8 && < 9.11
+ghc-boot >= 9.8 && < 9.11
 ```
 
 The host worker remains pinned to GHC 9.8.4.
@@ -138,15 +159,16 @@ The host worker remains pinned to GHC 9.8.4.
 
 Confirmed:
 
-- expression splice interception by GHC 9.10.2 and 9.4.8 plugins;
+- expression splice interception by the GHC 9.10.x plugin;
 - request/response with a GHC 9.8.4 worker;
-- textual generated Haskell as the cross-version boundary;
+- textual generated Haskell as the legacy cross-version boundary;
 - local parsing by the consumer GHC.
 
 Not confirmed by this test:
 
 - broad source compatibility across future GHC APIs;
 - semantic compatibility for target-specific CPP or target-only imports.
+- production compatibility for the planned binary Template Haskell AST payload.
 
 ## Binary Annotation Wrapper Probe
 

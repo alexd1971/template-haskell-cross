@@ -1,11 +1,11 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
--- | JSON-lines protocol shared by the cross-side plugin and host TH worker.
+-- | Binary protocol shared by the cross-side plugin and host TH worker.
 --
--- The protocol deliberately transports generated Haskell text rather than GHC
--- AST values. The receiving compiler parses that text locally into its own
--- @GhcPs@ AST.
+-- Messages are encoded with "Data.Binary" and framed with a 4-byte big-endian
+-- payload length. The current payload still contains generated Haskell text;
+-- the binary framing is the transport layer needed before moving splice results
+-- to raw Template Haskell AST values.
 module THCross.Protocol
   ( SpliceDiagnostic (..)
   , SpliceForeignFile (..)
@@ -14,30 +14,27 @@ module THCross.Protocol
   , SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
-  , decodeRequestLine
-  , decodeResponseLine
-  , encodeRequestLine
-  , encodeResponseLine
   , foreignSrcLangToStr
+  , readRequest
+  , readResponse
   , sourceSpanKeyText
   , spliceKindToStr
+  , writeRequest
+  , writeResponse
   ) where
 
-import Data.Aeson
-  ( FromJSON (..)
-  , ToJSON (..)
-  , eitherDecode
+import Control.Exception (IOException, try)
+import Data.Binary
+  ( Binary (..)
+  , decodeOrFail
   , encode
-  , object
-  , withObject
-  , (.:)
-  , (.:?)
-  , (.!=)
-  , (.=)
   )
+import Data.Binary.Get (Get, getWord32be, runGetOrFail)
+import Data.Binary.Put (Put, putWord32be, runPut)
 import qualified Data.ByteString.Lazy as BL
 import GHC.Tc.Types (ForeignSrcLang (..))
-import Data.Word (Word8)
+import System.IO (Handle, hFlush)
+import Data.Word (Word32, Word8)
 import THCross.SpliceKey (SpliceKey)
 
 -- | Diagnostic produced by host-side TH through @reportWarning@ or
@@ -50,27 +47,12 @@ data SpliceDiagnostic = SpliceDiagnostic
   }
   deriving (Eq, Show)
 
-instance ToJSON SpliceDiagnostic where
-  toJSON diagnostic =
-    object
-      [ "severity" .= diagnosticSeverity diagnostic
-      , "message" .= spliceDiagnosticMessage diagnostic
-      ]
-    where
-      diagnosticSeverity value
-        | spliceDiagnosticIsError value = "error" :: String
-        | otherwise = "warning"
-
-instance FromJSON SpliceDiagnostic where
-  parseJSON =
-    withObject "SpliceDiagnostic" $ \obj -> do
-      severity <- obj .: "severity"
-      isError <-
-        case severity :: String of
-          "error" -> pure True
-          "warning" -> pure False
-          raw -> fail ("unknown diagnostic severity: " <> raw)
-      SpliceDiagnostic isError <$> obj .: "message"
+instance Binary SpliceDiagnostic where
+  put diagnostic = do
+    put (spliceDiagnosticIsError diagnostic)
+    put (spliceDiagnosticMessage diagnostic)
+  get =
+    SpliceDiagnostic <$> get <*> get
 
 -- | Foreign source file registered by host-side TH through
 -- @addForeignFilePath@.
@@ -82,22 +64,12 @@ data SpliceForeignFile = SpliceForeignFile
   }
   deriving (Eq, Show)
 
-instance ToJSON SpliceForeignFile where
-  toJSON foreignFile =
-    object
-      [ "language" .= foreignSrcLangToStr (spliceForeignFileLang foreignFile)
-      , "path" .= spliceForeignFilePath foreignFile
-      ]
-
-instance FromJSON SpliceForeignFile where
-  parseJSON =
-    withObject "SpliceForeignFile" $ \obj -> do
-      rawLang <- obj .: "language"
-      foreignLang <-
-        case parseForeignSrcLang rawLang of
-          Right value -> pure value
-          Left err -> fail err
-      SpliceForeignFile foreignLang <$> obj .: "path"
+instance Binary SpliceForeignFile where
+  put foreignFile = do
+    putForeignSrcLang (spliceForeignFileLang foreignFile)
+    put (spliceForeignFilePath foreignFile)
+  get =
+    SpliceForeignFile <$> getForeignSrcLang <*> get
 
 -- | Stable textual representation of GHC's foreign source language.
 foreignSrcLangToStr :: ForeignSrcLang -> String
@@ -107,24 +79,31 @@ foreignSrcLangToStr = \case
   LangObjc -> "objc"
   LangObjcxx -> "objcxx"
   LangAsm -> "asm"
-#if MIN_VERSION_ghc(9,8,0)
   LangJs -> "js"
-#endif
   RawObject -> "raw-object"
 
 -- | Parse the protocol representation back to GHC's foreign source language.
-parseForeignSrcLang :: String -> Either String ForeignSrcLang
-parseForeignSrcLang = \case
-  "c" -> Right LangC
-  "cxx" -> Right LangCxx
-  "objc" -> Right LangObjc
-  "objcxx" -> Right LangObjcxx
-  "asm" -> Right LangAsm
-#if MIN_VERSION_ghc(9,8,0)
-  "js" -> Right LangJs
-#endif
-  "raw-object" -> Right RawObject
-  raw -> Left ("unknown foreign source language: " <> raw)
+putForeignSrcLang :: ForeignSrcLang -> Put
+putForeignSrcLang = \case
+  LangC -> put (0 :: Word8)
+  LangCxx -> put (1 :: Word8)
+  LangObjc -> put (2 :: Word8)
+  LangObjcxx -> put (3 :: Word8)
+  LangAsm -> put (4 :: Word8)
+  LangJs -> put (5 :: Word8)
+  RawObject -> put (6 :: Word8)
+
+getForeignSrcLang :: Get ForeignSrcLang
+getForeignSrcLang =
+  get >>= \case
+    0 -> pure LangC
+    1 -> pure LangCxx
+    2 -> pure LangObjc
+    3 -> pure LangObjcxx
+    4 -> pure LangAsm
+    5 -> pure LangJs
+    6 -> pure RawObject
+    tag -> fail ("unknown foreign source language tag: " <> show (tag :: Word8))
 
 -- | Result of host-side splice evaluation plus effects to replay in cross GHC.
 data SpliceResult = SpliceResult
@@ -143,27 +122,16 @@ data SpliceResult = SpliceResult
   }
   deriving (Eq, Show)
 
-instance ToJSON SpliceResult where
-  toJSON result =
-    object
-      [ "generatedHaskell" .= spliceResultHaskell result
-      , "annotationWrapper" .= spliceResultAnnotationWrapper result
-      , "dependentFiles" .= spliceResultDependentFiles result
-      , "foreignFiles" .= spliceResultForeignFiles result
-      , "addedTopDecls" .= spliceResultAddedTopDecls result
-      , "diagnostics" .= spliceResultDiagnostics result
-      ]
-
-instance FromJSON SpliceResult where
-  parseJSON =
-    withObject "SpliceResult" $ \obj ->
-      SpliceResult
-        <$> obj .: "generatedHaskell"
-        <*> obj .:? "annotationWrapper"
-        <*> obj .: "dependentFiles"
-        <*> obj .:? "foreignFiles" .!= []
-        <*> obj .:? "addedTopDecls" .!= ""
-        <*> obj .:? "diagnostics" .!= []
+instance Binary SpliceResult where
+  put result = do
+    put (spliceResultHaskell result)
+    put (spliceResultAnnotationWrapper result)
+    put (spliceResultDependentFiles result)
+    put (spliceResultForeignFiles result)
+    put (spliceResultAddedTopDecls result)
+    put (spliceResultDiagnostics result)
+  get =
+    SpliceResult <$> get <*> get <*> get <*> get <*> get <*> get
 
 -- | 1-based source span for the splice as seen by the cross GHC process.
 data SourceSpan = SourceSpan
@@ -178,23 +146,14 @@ data SourceSpan = SourceSpan
   }
   deriving (Eq, Show)
 
-instance ToJSON SourceSpan where
-  toJSON spanInfo =
-    object
-      [ "startLine" .= sourceSpanStartLine spanInfo
-      , "startColumn" .= sourceSpanStartColumn spanInfo
-      , "endLine" .= sourceSpanEndLine spanInfo
-      , "endColumn" .= sourceSpanEndColumn spanInfo
-      ]
-
-instance FromJSON SourceSpan where
-  parseJSON =
-    withObject "SourceSpan" $ \obj ->
-      SourceSpan
-        <$> obj .: "startLine"
-        <*> obj .: "startColumn"
-        <*> obj .: "endLine"
-        <*> obj .: "endColumn"
+instance Binary SourceSpan where
+  put spanInfo = do
+    put (sourceSpanStartLine spanInfo)
+    put (sourceSpanStartColumn spanInfo)
+    put (sourceSpanEndLine spanInfo)
+    put (sourceSpanEndColumn spanInfo)
+  get =
+    SourceSpan <$> get <*> get <*> get <*> get
 
 -- | Stable textual representation used as part of 'SpliceKey' payload.
 sourceSpanKeyText :: SourceSpan -> String
@@ -216,19 +175,21 @@ data SpliceKind
   | AnnotationWrapperSplice
   deriving (Eq, Show)
 
-instance ToJSON SpliceKind where
-  toJSON = toJSON . spliceKindToStr
-
-instance FromJSON SpliceKind where
-  parseJSON value = do
-    raw <- parseJSON value
-    case raw :: String of
-      "expression" -> pure ExpressionSplice
-      "type" -> pure TypeSplice
-      "pattern" -> pure PatternSplice
-      "declaration" -> pure DeclarationSplice
-      "annotation-wrapper" -> pure AnnotationWrapperSplice
-      _ -> fail ("unknown splice kind: " <> raw)
+instance Binary SpliceKind where
+  put = \case
+    ExpressionSplice -> put (0 :: Word8)
+    TypeSplice -> put (1 :: Word8)
+    PatternSplice -> put (2 :: Word8)
+    DeclarationSplice -> put (3 :: Word8)
+    AnnotationWrapperSplice -> put (4 :: Word8)
+  get =
+    get >>= \case
+      0 -> pure ExpressionSplice
+      1 -> pure TypeSplice
+      2 -> pure PatternSplice
+      3 -> pure DeclarationSplice
+      4 -> pure AnnotationWrapperSplice
+      tag -> fail ("unknown splice kind tag: " <> show (tag :: Word8))
 
 -- | Stable textual representation used on the wire.
 spliceKindToStr :: SpliceKind -> String
@@ -267,39 +228,22 @@ data SpliceRequest = SpliceRequest
   }
   deriving (Eq, Show)
 
-instance ToJSON SpliceRequest where
-  toJSON request =
-    object
-      [ "requestId" .= requestId request
-      , "module" .= requestModuleName request
-      , "componentUnitId" .= requestComponentUnitId request
-      , "sourceFile" .= requestSourceFile request
-      , "spliceKind" .= requestSpliceKind request
-      , "sourceSpan" .= requestSourceSpan request
-      , "spliceKey" .= requestSpliceKey request
-      , "spliceExpression" .= requestSpliceExpression request
-      , "crossGhcVersion" .= requestCrossGhcVersion request
-      , "hostPackageIds" .= requestHostPackageIds request
-      , "hostSourceDirs" .= requestHostSourceDirs request
-      , "hostGhcOptions" .= requestHostGhcOptions request
-      ]
-
-instance FromJSON SpliceRequest where
-  parseJSON =
-    withObject "SpliceRequest" $ \obj ->
-      SpliceRequest
-        <$> obj .: "requestId"
-        <*> obj .: "module"
-        <*> obj .:? "componentUnitId" .!= ""
-        <*> obj .: "sourceFile"
-        <*> obj .: "spliceKind"
-        <*> obj .: "sourceSpan"
-        <*> obj .: "spliceKey"
-        <*> obj .: "spliceExpression"
-        <*> obj .: "crossGhcVersion"
-        <*> obj .:? "hostPackageIds" .!= []
-        <*> obj .:? "hostSourceDirs" .!= []
-        <*> obj .:? "hostGhcOptions" .!= []
+instance Binary SpliceRequest where
+  put request = do
+    put (requestId request)
+    put (requestModuleName request)
+    put (requestComponentUnitId request)
+    put (requestSourceFile request)
+    put (requestSpliceKind request)
+    put (requestSourceSpan request)
+    put (requestSpliceKey request)
+    put (requestSpliceExpression request)
+    put (requestCrossGhcVersion request)
+    put (requestHostPackageIds request)
+    put (requestHostSourceDirs request)
+    put (requestHostGhcOptions request)
+  get =
+    SpliceRequest <$> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get
 
 -- | Response returned by the native host worker.
 data SpliceResponse
@@ -317,62 +261,88 @@ data SpliceResponse
       }
   deriving (Eq, Show)
 
-instance ToJSON SpliceResponse where
-  toJSON response =
-    case response of
-      SpliceOk reqId spliceResult ->
-        object
-          [ "requestId" .= reqId
-          , "status" .= ("ok" :: String)
-          , "generatedHaskell" .= spliceResultHaskell spliceResult
-          , "annotationWrapper" .= spliceResultAnnotationWrapper spliceResult
-          , "dependentFiles" .= spliceResultDependentFiles spliceResult
-          , "foreignFiles" .= spliceResultForeignFiles spliceResult
-          , "addedTopDecls" .= spliceResultAddedTopDecls spliceResult
-          , "diagnostics" .= spliceResultDiagnostics spliceResult
-          ]
-      SpliceError reqId message ->
-        object
-          [ "requestId" .= reqId
-          , "status" .= ("error" :: String)
-          , "message" .= message
-          ]
+instance Binary SpliceResponse where
+  put = \case
+    SpliceOk reqId spliceResult -> do
+      put (0 :: Word8)
+      put reqId
+      put spliceResult
+    SpliceError reqId message -> do
+      put (1 :: Word8)
+      put reqId
+      put message
+  get =
+    get >>= \case
+      0 -> SpliceOk <$> get <*> get
+      1 -> SpliceError <$> get <*> get
+      tag -> fail ("unknown splice response tag: " <> show (tag :: Word8))
 
-instance FromJSON SpliceResponse where
-  parseJSON =
-    withObject "SpliceResponse" $ \obj -> do
-      reqId <- obj .: "requestId"
-      status <- obj .: "status"
-      case status :: String of
-        "ok" ->
-          SpliceOk reqId
-            <$> ( SpliceResult
-                    <$> obj .: "generatedHaskell"
-                    <*> obj .:? "annotationWrapper"
-                    <*> obj .: "dependentFiles"
-                    <*> obj .:? "foreignFiles" .!= []
-                    <*> obj .:? "addedTopDecls" .!= ""
-                    <*> obj .:? "diagnostics" .!= []
-                )
-        "error" -> SpliceError reqId <$> obj .: "message"
-        _ -> fail ("unknown response status: " <> status)
+-- | Write one length-prefixed binary request frame.
+writeRequest :: Handle -> SpliceRequest -> IO ()
+writeRequest = writeMessage
 
--- | Encode a request as one JSON-lines frame.
-encodeRequestLine :: SpliceRequest -> BL.ByteString
-encodeRequestLine = encodeJsonLine
+-- | Read one length-prefixed binary request frame.
+readRequest :: Handle -> IO (Either String SpliceRequest)
+readRequest = readMessage
 
--- | Decode a request from one JSON-lines frame.
-decodeRequestLine :: BL.ByteString -> Either String SpliceRequest
-decodeRequestLine = eitherDecode
+-- | Write one length-prefixed binary response frame.
+writeResponse :: Handle -> SpliceResponse -> IO ()
+writeResponse = writeMessage
 
--- | Encode a response as one JSON-lines frame.
-encodeResponseLine :: SpliceResponse -> BL.ByteString
-encodeResponseLine = encodeJsonLine
+-- | Read one length-prefixed binary response frame.
+readResponse :: Handle -> IO (Either String SpliceResponse)
+readResponse = readMessage
 
--- | Decode a response from one JSON-lines frame.
-decodeResponseLine :: BL.ByteString -> Either String SpliceResponse
-decodeResponseLine = eitherDecode
+writeMessage :: Binary a => Handle -> a -> IO ()
+writeMessage handle message = do
+  let payload = encode message
+      frame = runPut (putWord32be (fromIntegral (BL.length payload))) <> payload
+  BL.hPut handle frame
+  hFlush handle
 
--- | Encode a JSON value and append the newline frame delimiter.
-encodeJsonLine :: ToJSON a => a -> BL.ByteString
-encodeJsonLine value = encode value <> "\n"
+readMessage :: Binary a => Handle -> IO (Either String a)
+readMessage handle = do
+  frameOrError <- try $ do
+    lengthBytes <- BL.hGet handle 4
+    if BL.length lengthBytes /= 4
+      then
+        fail
+          ( "incomplete protocol frame length: expected 4 bytes, got "
+              <> show (BL.length lengthBytes)
+          )
+      else do
+        payloadLength <- decodeFrameLength lengthBytes
+        payload <- BL.hGet handle (fromIntegral payloadLength)
+        if BL.length payload /= fromIntegral payloadLength
+          then
+            fail
+              ( "incomplete protocol payload: expected "
+                  <> show payloadLength
+                  <> " bytes, got "
+                  <> show (BL.length payload)
+              )
+          else
+            pure payload
+  pure $
+    case frameOrError of
+      Left err ->
+        Left ("protocol frame read failed: " <> show (err :: IOException))
+      Right payload ->
+        decodeMessage payload
+
+decodeFrameLength :: BL.ByteString -> IO Word32
+decodeFrameLength bytes =
+  case runGetOrFail getWord32be bytes of
+    Left (_, _, err) ->
+      fail ("invalid protocol frame length: " <> err)
+    Right (_, _, payloadLength) ->
+      pure payloadLength
+
+decodeMessage :: Binary a => BL.ByteString -> Either String a
+decodeMessage payload =
+  case decodeOrFail payload of
+    Left (_, _, err) ->
+      Left ("protocol payload decode failed: " <> err)
+    Right (remaining, _, message)
+      | BL.null remaining -> Right message
+      | otherwise -> Left ("protocol payload had trailing bytes: " <> show (BL.length remaining))

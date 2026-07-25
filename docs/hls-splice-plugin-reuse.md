@@ -528,4 +528,4 @@ associate it with the original typed splice expression
 
 For `th-cross`, this should be implemented inside the native host worker. The
 worker should then convert captured expansions to textual Haskell and return
-them over the existing JSON-lines protocol.
+them over the existing binary-framed protocol.

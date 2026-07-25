@@ -18,7 +18,7 @@ worker receives expression/declaration splice request
   -> defaultRunMeta executes TH normally
   -> hook captures generated GhcPs expansion
   -> worker pretty-prints the captured expansion
-  -> worker returns generatedHaskell over JSON Lines
+  -> worker returns generatedHaskell over the binary-framed protocol
 ```
 
 This replaces the earlier Task 7 isolated `runghc` splice-eval file. The old

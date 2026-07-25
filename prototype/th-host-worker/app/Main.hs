@@ -1,13 +1,13 @@
--- | JSON-lines entry point for the native host worker.
+-- | Binary-protocol entry point for the native host worker.
 --
 -- The worker reads splice requests from stdin and writes splice responses to
 -- stdout. Host-side GHC evaluation lives in "Worker.Evaluate" so this
 -- module stays focused on transport and request dispatch.
 module Main (main) where
 
-import qualified Data.ByteString.Lazy.Char8 as BL
 import System.IO
-  ( BufferMode (LineBuffering)
+  ( BufferMode (LineBuffering, NoBuffering)
+  , stdin
   , hSetBuffering
   , isEOF
   , stderr
@@ -17,8 +17,8 @@ import THCross.Protocol
   ( SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
-  , decodeRequestLine
-  , encodeResponseLine
+  , readRequest
+  , writeResponse
   )
 import Worker.Evaluate
   ( EvaluationCache
@@ -31,27 +31,28 @@ import Worker.Evaluate
 -- stdout is protocol output, so diagnostics must go to stderr if added later.
 main :: IO ()
 main = do
-  hSetBuffering stdout LineBuffering
+  hSetBuffering stdin NoBuffering
+  hSetBuffering stdout NoBuffering
   hSetBuffering stderr LineBuffering
   cache <- newEvaluationCache
   workerLoop cache
 
--- | Process JSON-lines requests until stdin closes.
+-- | Process framed binary requests until stdin closes.
 workerLoop :: EvaluationCache -> IO ()
 workerLoop cache = do
   done <- isEOF
   if done
     then pure ()
     else do
-      line <- getLine
-      response <- handleLine cache (BL.pack line)
-      BL.putStr (encodeResponseLine response)
+      response <- handleFrame cache
+      writeResponse stdout response
       workerLoop cache
 
 -- | Decode one protocol frame and convert decode failures into protocol errors.
-handleLine :: EvaluationCache -> BL.ByteString -> IO SpliceResponse
-handleLine cache line =
-  case decodeRequestLine line of
+handleFrame :: EvaluationCache -> IO SpliceResponse
+handleFrame cache = do
+  requestOrError <- readRequest stdin
+  case requestOrError of
     Left err ->
       pure (SpliceError "<decode-error>" err)
     Right request ->

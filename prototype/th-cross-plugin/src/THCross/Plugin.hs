@@ -3,7 +3,7 @@
 -- | Prototype GHC plugin for intercepting Template Haskell splice evaluation.
 --
 -- The plugin installs a custom 'runMetaHook' through the driver plugin hook.
--- With @-fplugin-opt=THCross.Plugin:worker=PATH@ it asks an external JSON-lines
+-- With @-fplugin-opt=THCross.Plugin:worker=PATH@ it asks an external binary
 -- worker for generated Haskell text, parses that text locally, and returns the
 -- resulting @GhcPs@ AST.
 module THCross.Plugin (plugin) where
@@ -17,7 +17,6 @@ import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Data.Binary (decodeOrFail)
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.List (stripPrefix)
 import Data.Maybe (listToMaybe, mapMaybe)
 import GHC.Driver.Env.Types (HscEnv (..))
@@ -32,18 +31,12 @@ import GHC.Data.FastString (unpackFS)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Serialized (Serialized)
 import GHC.Settings.Config (cProjectVersion)
-#if MIN_VERSION_ghc(9,8,0)
 import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
-#endif
 import GHC.Tc.Types (TcGblEnv (..), TcM)
 import GHC.Tc.Utils.Monad
-  (
-#if MIN_VERSION_ghc(9,8,0)
-    addDiagnostic
+  ( addDiagnostic
   , addErr
-  ,
-#endif
-    getGblEnv
+  , getGblEnv
   , liftIO
   , updTcRef
   )
@@ -61,8 +54,6 @@ import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import GHCi.TH.Binary ()
 import System.IO
   ( Handle
-  , hFlush
-  , hGetLine
   , hSetBuffering
   , BufferMode (LineBuffering)
   )
@@ -87,11 +78,11 @@ import THCross.Protocol
   , SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
-  , decodeResponseLine
-  , encodeRequestLine
   , foreignSrcLangToStr
+  , readResponse
   , sourceSpanKeyText
   , spliceKindToStr
+  , writeRequest
   )
 import THCross.SpliceKey
   ( SpliceKey
@@ -253,7 +244,7 @@ data PluginConfig = PluginConfig
 -- | Persistent worker process state for one GHC session.
 type WorkerState = MVar (Maybe WorkerHandle)
 
--- | Handles for the long-lived JSON-lines worker process.
+-- | Handles for the long-lived binary-protocol worker process.
 data WorkerHandle = WorkerHandle
   { workerInput :: !Handle
   , workerOutput :: !Handle
@@ -328,7 +319,7 @@ metaRequestKind = \case
   MetaD{} -> DeclarationSplice
   MetaAW{} -> AnnotationWrapperSplice
 
--- | Build the JSON-lines protocol request sent to the host worker.
+-- | Build the protocol request sent to the host worker.
 --
 -- The request contains enough diagnostic and matching information for the
 -- worker to load the source module, capture the corresponding splice, and return
@@ -454,7 +445,6 @@ replayDiagnostics :: [SpliceDiagnostic] -> TcM ()
 replayDiagnostics =
   mapM_ replayDiagnostic
   where
-#if MIN_VERSION_ghc(9,8,0)
     replayDiagnostic diagnostic =
       let message =
             TcRnTHError
@@ -465,16 +455,8 @@ replayDiagnostics =
        in if spliceDiagnosticIsError diagnostic
             then addErr message
             else addDiagnostic message
-#else
-    replayDiagnostic diagnostic
-      | spliceDiagnosticIsError diagnostic =
-          fail ("TH host worker reported error: " <> spliceDiagnosticMessage diagnostic)
-      | otherwise =
-          liftIO $
-            putStrLn ("th-cross: warning: " <> spliceDiagnosticMessage diagnostic)
-#endif
 
--- | Run one JSON-lines request/response exchange with the worker executable.
+-- | Run one binary request/response exchange with the worker executable.
 --
 -- The worker process is started lazily on the first splice and then reused for
 -- later splices in the same GHC session.
@@ -493,7 +475,7 @@ callWorker config workerState workerPath request =
       result <- sendWorkerRequest worker request
       pure (Just worker, result)
 
--- | Start the JSON-lines worker and keep its stdin/stdout open.
+-- | Start the binary-protocol worker and keep its stdin/stdout open.
 startWorker :: FilePath -> IO WorkerHandle
 startWorker workerPath = do
   (Just workerIn, Just workerOut, Nothing, workerProcessHandle) <-
@@ -516,17 +498,16 @@ startWorker workerPath = do
 sendWorkerRequest :: WorkerHandle -> SpliceRequest -> IO (Either String SpliceResult)
 sendWorkerRequest worker request = do
   output <- try $ do
-    BL.hPutStr (workerInput worker) (encodeRequestLine request)
-    hFlush (workerInput worker)
-    hGetLine (workerOutput worker)
+    writeRequest (workerInput worker) request
+    readResponse (workerOutput worker)
   pure $
     case output of
       Left err ->
         Left ("TH host worker communication failed: " <> show (err :: IOException))
-      Right out ->
-        case decodeResponseLine (BL.pack out) of
+      Right responseOrError ->
+        case responseOrError of
           Left decodeErr ->
-            Left ("TH host worker returned invalid JSON response: " <> decodeErr)
+            Left ("TH host worker returned invalid binary response: " <> decodeErr)
           Right response ->
             handleWorkerResponse (requestId request) response
 

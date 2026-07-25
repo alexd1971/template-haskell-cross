@@ -3,24 +3,33 @@
 This document defines the initial protocol between the cross-side GHC plugin
 and the native host-side Template Haskell worker.
 
-The protocol is intentionally textual. The host worker returns generated
-Haskell source fragments, not GHC AST values. The cross GHC parses the returned
-fragment with its own parser and continues normal renaming, typechecking, and
-code generation.
+The current protocol uses binary framing but still returns generated Haskell
+source fragments, not GHC AST values. The cross GHC parses the returned fragment
+with its own parser and continues normal renaming, typechecking, and code
+generation.
 
 ## Transport
 
-The MVP transport is JSON Lines over stdin/stdout:
+The transport is length-prefixed binary messages over stdin/stdout:
 
 ```text
-cross GHC plugin writes one JSON request line to worker stdin
-host worker writes one JSON response line to stdout
+cross GHC plugin writes one binary request frame to worker stdin
+host worker writes one binary response frame to stdout
 ```
 
-Each message is exactly one JSON object followed by `\n`.
+Each frame is:
+
+```text
+4-byte big-endian payload length
+Data.Binary-encoded payload bytes
+```
 
 Worker diagnostics must go to stderr. Stdout is reserved for protocol
 responses.
+
+The first binary-framed payload is the existing `SpliceRequest` or
+`SpliceResponse` Haskell value encoded with `Data.Binary`. This avoids base64
+when later protocol revisions carry raw `template-haskell` AST values.
 
 ## Splice Kinds
 
@@ -40,35 +49,6 @@ same-GHC-version helper for replaying annotation declarations produced by
 `addTopDecls`.
 
 ## Request
-
-```json
-{
-  "requestId": "123",
-  "module": "My.Project.Foo",
-  "componentUnitId": "my-package-0.1.0.0-abc123-my-exe",
-  "sourceFile": "/path/to/My/Project/Foo.hs",
-  "spliceKind": "expression",
-  "sourceSpan": {
-    "startLine": 42,
-    "startColumn": 7,
-    "endLine": 42,
-    "endColumn": 24
-  },
-  "spliceKey": "2bfc6d6f9f7d6abdfb5dbb5c8ab8d3d1",
-  "spliceExpression": "genFoo 123",
-  "crossGhcVersion": "9.8.4",
-  "hostPackageIds": [
-    "microlens-0.4.14.0-1VGRH8KhtCiFJuTK8ISqfF",
-    "microlens-th-0.4.3.17-GmrnQrlDn7K6e99RCCjC8F"
-  ],
-  "hostSourceDirs": [
-    "src"
-  ],
-  "hostGhcOptions": [
-    "-Dandroid_HOST_OS"
-  ]
-}
-```
 
 Fields:
 
@@ -100,19 +80,6 @@ Fields:
 
 ## Successful Response
 
-```json
-{
-  "requestId": "123",
-  "status": "ok",
-  "generatedHaskell": "42",
-  "annotationWrapper": null,
-  "dependentFiles": [],
-  "foreignFiles": [],
-  "addedTopDecls": "",
-  "diagnostics": []
-}
-```
-
 `dependentFiles` contains files registered by host-side Template Haskell through
 `addDependentFile`. The cross-side plugin must replay these into the cross GHC
 session.
@@ -120,15 +87,6 @@ session.
 `foreignFiles` contains files registered by host-side Template Haskell through
 `addForeignFilePath`. The cross-side plugin replays these into the cross GHC
 session so the target-side build can compile/link them.
-
-Foreign file entry:
-
-```json
-{
-  "language": "c",
-  "path": "cbits/generated.c"
-}
-```
 
 `language` is one of `c`, `cxx`, `objc`, `objcxx`, `asm`, `js`, or
 `raw-object`.
@@ -152,13 +110,6 @@ replays those diagnostics into the current GHC session.
 
 Diagnostic entry:
 
-```json
-{
-  "severity": "warning",
-  "message": "generated code uses a fallback"
-}
-```
-
 `severity` is either `warning` for `reportWarning` or `error` for `reportError`.
 
 Fields:
@@ -177,14 +128,6 @@ Fields:
 
 ## Error Response
 
-```json
-{
-  "requestId": "123",
-  "status": "error",
-  "message": "failed to evaluate splice"
-}
-```
-
 Fields:
 
 - `requestId`: request id copied from the request, if known.
@@ -196,10 +139,4 @@ Fields:
 The first prototype has no explicit protocol version field. Backward-compatible
 fields may be added later. The first breaking change should add:
 
-```json
-{
-  "protocolVersion": 1
-}
-```
-
-to both request and response objects.
+to both request and response payloads.

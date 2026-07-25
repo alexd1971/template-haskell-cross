@@ -1,4 +1,4 @@
-{ mkDerivation, aeson, base, binary, bytestring, directory
+{ mkDerivation, base, binary, bytestring, directory
 , filepath, ghc, ghc-boot, ghci, lib, process, tasty, tasty-hunit
 }:
 mkDerivation {
@@ -6,7 +6,7 @@ mkDerivation {
   version = "0.1.0.0";
   src = ../../prototype/th-cross-plugin;
   libraryHaskellDepends = [
-    aeson base binary bytestring ghc ghc-boot ghci process
+    base binary bytestring ghc ghc-boot ghci process
   ];
   testHaskellDepends = [
     base directory filepath process tasty tasty-hunit
