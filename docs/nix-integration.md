@@ -43,6 +43,7 @@ be introduced later as a separate target package set.
 ```text
 packages.${system}.host-ghc984-worker
 packages.${system}.host-ghc984-plugin
+packages.${system}.host-ghc9103-worker
 packages.${system}.cross-ghc9103-aarch64-linux
 packages.${system}.consumer-ghc9103-cross-generic-package
 packages.${system}.consumer-ghc9103-cross-microlens-package
@@ -66,6 +67,10 @@ host architecture:
 - `host-ghc984-worker` comes from `hostHaskellPkgs` and is built with GHC 9.8.4;
 - `host-ghc984-plugin` is the GHC 9.8.4 plugin build used by the local
   prototype;
+- `host-ghc9103-worker` is built with a native patched GHC 9.10.3 that exports
+  `runTHExp`, `runTHPat`, `runTHType`, and `runTHDec` from
+  `GHC.Tc.Gen.Splice`. It is reserved for the upcoming same-GHC raw Template
+  Haskell AST protocol path;
 - `cross-ghc9103-aarch64-linux` — рабочий кросс-GHC 9.10.3 для
   `aarch64-linux` с тремя патчами (см. `docs/ghc-cross-patches.md`),
   поддерживающий загрузку плагина через `-fplugin-library`;

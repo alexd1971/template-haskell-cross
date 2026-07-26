@@ -4,6 +4,33 @@ let
   # This file contains only Haskell package-set wiring. Cross-GHC experiments
   # live under `experiments/`.
 
+  mkHaskellPackageSet =
+    { ghc
+    , compilerConfig
+    , overrides
+    }:
+    pkgs.callPackage (pkgs.path + "/pkgs/development/haskell-modules") {
+      haskellLib = pkgs.haskell.lib.compose;
+      buildHaskellPackages = pkgs.haskell.packages.ghc9103;
+      inherit ghc compilerConfig overrides;
+    };
+
+  ghc9103CompilerConfig =
+    pkgs.callPackage
+      (pkgs.path + "/pkgs/development/haskell-modules/configuration-ghc-9.10.x.nix")
+      {
+        haskellLib = pkgs.haskell.lib.compose;
+      };
+
+  # Native GHC 9.10.3 with the minimal export-list patch needed by the upcoming
+  # raw Template Haskell AST worker path.
+  patchedNativeGhc9103 =
+    pkgs.haskell.compiler.ghc9103.overrideAttrs (old: {
+      patches = (old.patches or []) ++ [
+        ../patches/ghc-9.10.3-export-runth.patch
+      ];
+    });
+
   # Native host-side package set. The worker must run on the build host and
   # currently targets GHC 9.8.4 because the first prototype is tied to that GHC
   # API.
@@ -39,10 +66,32 @@ let
     };
   };
 
+  hostGhc9103HaskellPkgs =
+    mkHaskellPackageSet {
+      ghc = patchedNativeGhc9103;
+      compilerConfig = ghc9103CompilerConfig;
+      overrides = selfH: superH: {
+        # Private worker dependency for shared protocol modules. The public
+        # consumer-side plugin remains `consumerGhc9103HaskellPkgs.th-cross-plugin`.
+        th-cross-plugin =
+          pkgs.callPackage ../th-cross-plugin.nix {
+            callPackage = selfH.callPackage;
+            haskellLib = pkgs.haskell.lib;
+          };
+        th-host-worker =
+          pkgs.callPackage ../th-host-worker.nix {
+            callPackage = selfH.callPackage;
+            haskellLib = pkgs.haskell.lib;
+            hostGhcLibDir = "${patchedNativeGhc9103}/lib/ghc-9.10.3/lib";
+            th-cross-plugin = selfH.th-cross-plugin;
+          };
+      };
+    };
+
   nixTools = pkgs.haskell.packages.ghc9103.callPackage ../th-cross-nix-tools.nix { };
 in
 {
-  inherit hostHaskellPkgs consumerGhc9103HaskellPkgs nixTools;
+  inherit hostHaskellPkgs hostGhc9103HaskellPkgs consumerGhc9103HaskellPkgs nixTools;
 
   consumerGhc9103 = consumerGhc9103HaskellPkgs.ghcWithPackages (hpkgs: [
     hpkgs.th-cross-plugin

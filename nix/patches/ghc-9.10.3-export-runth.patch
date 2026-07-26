@@ -1,0 +1,9 @@
+--- a/compiler/GHC/Tc/Gen/Splice.hs
++++ b/compiler/GHC/Tc/Gen/Splice.hs
+@@ -23,6 +23,7 @@ module GHC.Tc.Gen.Splice(
+      runMetaE, runMetaP, runMetaT, runMetaD, runQuasi,
+      tcTopSpliceExpr, lookupThName_maybe,
+      defaultRunMeta, runMeta', runRemoteModFinalizers,
++     runTHExp, runTHPat, runTHType, runTHDec,
+      finishTH, runTopSplice
+       ) where
