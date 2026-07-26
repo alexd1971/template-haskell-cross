@@ -4,7 +4,8 @@ module Main (main) where
 
 import Integration.Cases (testTrees)
 import Integration.Harness
-  ( TestEnv (..)
+  ( CompileRunner (..)
+  , TestEnv (..)
   , findProjectRoot
   )
 import System.Directory (makeAbsolute)
@@ -25,6 +26,7 @@ main = do
           , testFixturesDir = fixturesDir
           , testWorkerPath = workerPath
           , testHostGhcLibDir = hostGhcLibDir
+          , testCompileRunner = CabalExecGhc "ghc-9.8.4" "ghc-9.8.4-pkg"
           }
   defaultMain
     ( testGroup

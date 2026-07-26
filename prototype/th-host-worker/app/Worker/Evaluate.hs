@@ -14,6 +14,7 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Word (Word8)
+import qualified Language.Haskell.TH as TH
 import System.Directory (createDirectoryIfMissing)
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
@@ -51,9 +52,16 @@ import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Serialized (Serialized)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
+#if MIN_VERSION_ghc(9,10,0)
+import GHC.Tc.Gen.Splice (runMeta', runTHExp)
+#endif
 import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
 import GHC.Tc.Types (TcGblEnv (..), TcM)
 import GHC.Tc.Utils.Monad (getErrsVar, getGblEnv, liftIO, readTcRef, writeTcRef)
+#if MIN_VERSION_ghc(9,10,0)
+import GHC.ThToHs (convertToHsExpr)
+import GHC.Types.Basic (Origin (FromSource))
+#endif
 import GHC.Types.Error
   ( Messages
   , MsgEnvelope (errMsgDiagnostic)
@@ -88,6 +96,9 @@ import GHC.Utils.Outputable
   , ppr
   , renderWithContext
   , sdocSuppressUniques
+#if MIN_VERSION_ghc(9,10,0)
+  , text
+#endif
   )
 import GHCi.TH.Binary ()
 import System.FilePath ((</>), takeDirectory)
@@ -100,6 +111,7 @@ import THCross.Protocol
   , SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
+  , WireFormat (..)
   , sourceSpanKeyText
   , spliceKindToStr
   )
@@ -121,10 +133,12 @@ data CapturedSplice = CapturedSplice
 --
 -- 'SpliceKey' identifies the source occurrence. The component unit id and
 -- source file scope that occurrence to the Cabal/GHC component context that
--- produced the expansion.
+-- produced the expansion. The wire format is part of the key because raw TH
+-- requests carry payloads that textual requests do not.
 data CacheKey = CacheKey
   { cacheKeyComponentUnitId :: !String
   , cacheKeySourceFile :: !FilePath
+  , cacheKeyWireFormat :: !WireFormat
   , cacheKeySpliceKey :: !SpliceKey
   }
   deriving (Eq, Ord, Show)
@@ -211,7 +225,7 @@ captureModuleSplices request = do
         setSessionDynFlags dflagsWithHostOptions
       _ ->
         fail ("unsupported host GHC option(s): " <> show (map unLoc remainingArgs))
-    installCaptureHook capturesRef dependentFilesRef foreignFilesRef
+    installCaptureHook (requestWireFormat request) capturesRef dependentFilesRef foreignFilesRef
     loadRequestedModule
   case result of
     Failed ->
@@ -257,6 +271,7 @@ cacheKeyFor request spliceKey =
   CacheKey
     { cacheKeyComponentUnitId = requestComponentUnitId request
     , cacheKeySourceFile = requestSourceFile request
+    , cacheKeyWireFormat = requestWireFormat request
     , cacheKeySpliceKey = spliceKey
     }
 
@@ -300,6 +315,7 @@ selectCachedAnnotationWrapperFallback request cache
         [ capturedSpliceResult captured
         | (cacheKey, captured) <- Map.toList cache
         , cacheKeyComponentUnitId cacheKey == requestComponentUnitId request
+        , cacheKeyWireFormat cacheKey == requestWireFormat request
         , capturedSpliceKind captured == AnnotationWrapperSplice
         ]
       of
@@ -361,15 +377,16 @@ exposeHostPackageId unitId =
 -- | Install a host-only hook that delegates to the previous hook/default GHC
 -- evaluator, records the generated splice, and returns it unchanged.
 installCaptureHook ::
+  WireFormat ->
   IORef CapturedSplices ->
   IORef [FilePath] ->
   IORef [SpliceForeignFile] ->
   Ghc ()
-installCaptureHook capturesRef dependentFilesRef foreignFilesRef = do
+installCaptureHook wireFormat capturesRef dependentFilesRef foreignFilesRef = do
   hscEnv <- getSession
   let hooks0 = hsc_hooks hscEnv
       previousRunMeta = runMetaHook hooks0
-      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta)}
+      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook wireFormat capturesRef dependentFilesRef foreignFilesRef previousRunMeta)}
   setSession hscEnv {hsc_hooks = hooks1}
 
 -- | Host-side 'runMetaHook' wrapper that records expansions without changing
@@ -380,18 +397,17 @@ installCaptureHook capturesRef dependentFilesRef foreignFilesRef = do
 -- session. The hook then pretty-prints the expansion, stores it in 'capturesRef',
 -- and returns the original expansion back to GHC so module loading continues.
 captureMetaHook ::
+  WireFormat ->
   IORef CapturedSplices ->
   IORef [FilePath] ->
   IORef [SpliceForeignFile] ->
   Maybe (MetaHook TcM) ->
   MetaHook TcM
-captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta request spliceExpr =
+captureMetaHook wireFormat capturesRef dependentFilesRef foreignFilesRef previousRunMeta request spliceExpr =
   case request of
     MetaE wrap -> do
       expanded <-
-        captureSpliceResult
-          ExpressionSplice
-          (metaRequestE runMeta)
+        captureExpressionSpliceResult
       pure (wrap expanded)
     MetaD wrap -> do
       expanded <-
@@ -419,6 +435,15 @@ captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta re
   where
     runMeta = fromMaybe defaultRunMeta previousRunMeta
 
+    captureExpressionSpliceResult =
+      case wireFormat of
+        TextualWireFormat ->
+          captureSpliceResult
+            ExpressionSplice
+            (metaRequestE runMeta)
+        RawTHWireFormat ->
+          captureRawExpressionSpliceResult
+
     captureSpliceResult spliceKind evaluateSplice =
       captureRenderedSpliceResult spliceKind evaluateSplice prettyExpanded
 
@@ -436,8 +461,38 @@ captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta re
       liftIO $ do
         writeIORef dependentFilesRef dependentFiles
         writeIORef foreignFilesRef foreignFiles
-        modifyIORef' capturesRef (Map.insert spliceKey (CapturedSplice spliceKind (mkSpliceResult renderedExpansion Nothing renderedAddedTopDecls diagnostics)))
+        modifyIORef' capturesRef (Map.insert spliceKey (CapturedSplice spliceKind (mkSpliceResult renderedExpansion Nothing Nothing renderedAddedTopDecls diagnostics)))
       pure expanded
+
+    captureRawExpressionSpliceResult =
+#if MIN_VERSION_ghc(9,10,0)
+      do
+        liftIO (hPutStrLn stderr "th-host-worker: raw-th expression start")
+        (thExp, diagnostics, addedTopDecls) <-
+          evaluateWithIsolatedSpliceState (runMetaExpRaw spliceExpr)
+        liftIO (hPutStrLn stderr "th-host-worker: raw-th expression evaluated")
+        hsExp <- convertRawExpressionOrFail spliceExpr thExp
+        liftIO (hPutStrLn stderr "th-host-worker: raw-th expression converted")
+        renderedAddedTopDecls <- prettyExpandedDeclarations addedTopDecls
+        spliceKey <- mkCapturedSpliceKey ExpressionSplice spliceExpr
+        dependentFiles <- getDependentFiles
+        foreignFiles <- getForeignFiles
+        liftIO $ do
+          writeIORef dependentFilesRef dependentFiles
+          writeIORef foreignFilesRef foreignFiles
+          modifyIORef'
+            capturesRef
+            ( Map.insert
+                spliceKey
+                ( CapturedSplice
+                    ExpressionSplice
+                    (mkSpliceResult (TH.pprint thExp) (Just thExp) Nothing renderedAddedTopDecls diagnostics)
+                )
+            )
+        pure hsExp
+#else
+      fail "raw-th wire format requires th-host-worker built with patched GHC 9.10 or newer"
+#endif
 
     captureAnnotationWrapper evaluateSplice = do
       (serialized, diagnostics, _addedTopDecls) <-
@@ -450,16 +505,17 @@ captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta re
               spliceKey
               ( CapturedSplice
                   AnnotationWrapperSplice
-                  (mkSpliceResult "" (Just (encodeAnnotationWrapper serialized)) "" diagnostics)
+                  (mkSpliceResult "" Nothing (Just (encodeAnnotationWrapper serialized)) "" diagnostics)
               )
           )
       pure serialized
 
 -- | Construct a captured splice result before module-level effects are attached.
-mkSpliceResult :: String -> Maybe [Word8] -> String -> [SpliceDiagnostic] -> SpliceResult
-mkSpliceResult renderedExpansion annotationWrapper renderedAddedTopDecls diagnostics =
+mkSpliceResult :: String -> Maybe TH.Exp -> Maybe [Word8] -> String -> [SpliceDiagnostic] -> SpliceResult
+mkSpliceResult renderedExpansion rawExpression annotationWrapper renderedAddedTopDecls diagnostics =
   SpliceResult
     { spliceResultHaskell = renderedExpansion
+    , spliceResultRawExpression = rawExpression
     , spliceResultAnnotationWrapper = annotationWrapper
     , spliceResultDependentFiles = []
     , spliceResultForeignFiles = []
@@ -471,6 +527,31 @@ mkSpliceResult renderedExpansion annotationWrapper renderedAddedTopDecls diagnos
 encodeAnnotationWrapper :: Serialized -> [Word8]
 encodeAnnotationWrapper =
   LBS.unpack . encode
+
+#if MIN_VERSION_ghc(9,10,0)
+-- | Evaluate an expression splice to raw Template Haskell syntax without
+-- converting it to GHC parsed syntax inside 'runMeta''.
+runMetaExpRaw :: LHsExpr GhcTc -> TcM TH.Exp
+runMetaExpRaw =
+  runMeta'
+    True
+    (text . TH.pprint)
+    (\_srcSpan hval -> Right <$> runTHExp hval)
+
+-- | Convert raw Template Haskell syntax back to parsed GHC syntax so the host
+-- GHC load keeps normal splice semantics while the raw payload is captured.
+convertRawExpressionOrFail :: LHsExpr GhcTc -> TH.Exp -> TcM (LHsExpr GhcPs)
+convertRawExpressionOrFail spliceExpr thExp =
+  case convertToHsExpr generatedOrigin (getLocA spliceExpr) thExp of
+    Left _err ->
+      fail "raw TH expression conversion failed"
+    Right hsExp ->
+      pure hsExp
+
+generatedOrigin :: Origin
+generatedOrigin =
+  FromSource
+#endif
 
 -- | Evaluate one splice while separately recording replayable TH state.
 --
@@ -505,8 +586,8 @@ extractTHDiagnostics messages =
   where
     extractTHDiagnostic message =
       case errMsgDiagnostic message of
-        TcRnTHError (ReportCustomQuasiError isError text) ->
-          Just (SpliceDiagnostic isError text)
+        TcRnTHError (ReportCustomQuasiError isError messageText) ->
+          Just (SpliceDiagnostic isError messageText)
         _ ->
           Nothing
 

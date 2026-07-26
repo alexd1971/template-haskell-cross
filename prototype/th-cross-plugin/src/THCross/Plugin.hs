@@ -28,6 +28,7 @@ import GHC.Driver.Plugins
   , purePlugin
   )
 import GHC.Data.FastString (unpackFS)
+import GHC.Hs (GhcPs, LHsExpr)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Serialized (Serialized)
 import GHC.Settings.Config (cProjectVersion)
@@ -40,6 +41,8 @@ import GHC.Tc.Utils.Monad
   , liftIO
   , updTcRef
   )
+import GHC.ThToHs (convertToHsExpr)
+import GHC.Types.Basic (Origin (FromSource))
 import GHC.Types.Meta (MetaHook, MetaRequest (..))
 import GHC.Types.SrcLoc
   ( SrcSpan (..)
@@ -82,6 +85,7 @@ import THCross.Protocol
   , readResponse
   , sourceSpanKeyText
   , spliceKindToStr
+  , WireFormat (..)
   , writeRequest
   )
 import THCross.SpliceKey
@@ -131,7 +135,7 @@ workerMetaHook workerState config request spliceExpr = do
   case request of
     MetaE wrap -> do
       generated <-
-        evaluateWorkerSplice tcGblEnv parseExpressionFragment
+        evaluateWorkerExpressionSplice tcGblEnv
       pure (wrap generated)
     MetaD wrap -> do
       generated <-
@@ -180,6 +184,21 @@ workerMetaHook workerState config request spliceExpr = do
         replayAddedTopDecls config (spliceResultAddedTopDecls spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
         parseFragment (spliceResultHaskell spliceResult)
+
+    evaluateWorkerExpressionSplice tcGblEnv =
+      do
+        spliceResult <-
+          requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+        logSpliceResult spliceResult
+        replayDependentFiles config (spliceResultDependentFiles spliceResult)
+        replayForeignFiles config (spliceResultForeignFiles spliceResult)
+        replayAddedTopDecls config (spliceResultAddedTopDecls spliceResult)
+        replayDiagnostics (spliceResultDiagnostics spliceResult)
+        case pluginWireFormat config of
+          TextualWireFormat ->
+            parseExpressionFragment (spliceResultHaskell spliceResult)
+          RawTHWireFormat ->
+            convertRawExpressionSplice sourceLoc spliceResult
 
     evaluateWorkerDeclarationSplice tcGblEnv =
       do
@@ -231,12 +250,29 @@ decodeAnnotationWrapper spliceResult =
         Right (_, _, serialized) ->
           pure serialized
 
+convertRawExpressionSplice :: SrcSpan -> SpliceResult -> TcM (LHsExpr GhcPs)
+convertRawExpressionSplice sourceLoc spliceResult =
+  case spliceResultRawExpression spliceResult of
+    Nothing ->
+      fail "TH host worker did not return a raw expression payload"
+    Just thExp ->
+      case convertToHsExpr generatedOrigin sourceLoc thExp of
+        Left _err ->
+          fail "TH host worker returned a raw expression payload that GHC could not convert"
+        Right hsExp ->
+          pure hsExp
+
+generatedOrigin :: Origin
+generatedOrigin =
+  FromSource
+
 -- | Runtime configuration selected by plugin options.
 data PluginConfig = PluginConfig
   { pluginWorkerPath :: !FilePath
   , pluginHostPackageIds :: ![String]
   , pluginHostSourceDirs :: ![FilePath]
   , pluginHostGhcOptions :: ![String]
+  , pluginWireFormat :: !WireFormat
   , pluginDebug :: !Bool
   }
   deriving (Eq, Show)
@@ -260,6 +296,7 @@ data WorkerHandle = WorkerHandle
 -- -fplugin-opt=THCross.Plugin:host-package-id=unit-id
 -- -fplugin-opt=THCross.Plugin:host-source-dir=src
 -- -fplugin-opt=THCross.Plugin:host-ghc-option=-DNAME
+-- -fplugin-opt=THCross.Plugin:wire-format=text|raw-th
 -- -fplugin-opt=THCross.Plugin:debug
 -- @
 --
@@ -269,13 +306,15 @@ data WorkerHandle = WorkerHandle
 parsePluginConfig :: [CommandLineOption] -> IO PluginConfig
 parsePluginConfig opts =
   case findWorkerPath opts of
-    Just workerPath ->
+    Just workerPath -> do
+      wireFormat <- findWireFormat opts
       pure
         PluginConfig
           { pluginWorkerPath = workerPath
           , pluginHostPackageIds = findHostPackageIds opts
           , pluginHostSourceDirs = findHostSourceDirs opts
           , pluginHostGhcOptions = findHostGhcOptions opts
+          , pluginWireFormat = wireFormat
           , pluginDebug = "debug" `elem` opts
           }
     Nothing ->
@@ -304,6 +343,15 @@ findHostSourceDirs =
 findHostGhcOptions :: [CommandLineOption] -> [String]
 findHostGhcOptions =
   mapMaybe (stripPrefix "host-ghc-option=")
+
+findWireFormat :: [CommandLineOption] -> IO WireFormat
+findWireFormat opts =
+  case listToMaybe (mapMaybe (stripPrefix "wire-format=") opts) of
+    Nothing -> pure TextualWireFormat
+    Just "text" -> pure TextualWireFormat
+    Just "raw-th" -> pure RawTHWireFormat
+    Just unknown ->
+      ioError (userError ("unknown THCross.Plugin wire-format: " <> unknown))
 
 -- | Emit a plugin debug line when @debug@ was passed in plugin options.
 whenDebug :: PluginConfig -> String -> TcM ()
@@ -335,8 +383,9 @@ mkSpliceRequest ::
   [String] ->
   [FilePath] ->
   [String] ->
+  WireFormat ->
   SpliceRequest
-mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs hostGhcOptions =
+mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs hostGhcOptions wireFormat =
   let (sourceFile, protocolSpan) = protocolSourceSpan sourceLoc
    in SpliceRequest
         { requestId = spliceModuleName <> ":" <> spliceKindToStr spliceKind <> ":" <> renderedSpan
@@ -351,6 +400,7 @@ mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSp
         , requestHostPackageIds = hostPackageIds
         , requestHostSourceDirs = hostSourceDirs
         , requestHostGhcOptions = hostGhcOptions
+        , requestWireFormat = wireFormat
         }
 
 -- | Convert GHC's source span into protocol data.
@@ -391,7 +441,7 @@ requestWorker ::
   TcM SpliceResult
 requestWorker workerState config spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr = do
   let workerRequest =
-        mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr (pluginHostPackageIds config) (pluginHostSourceDirs config) (pluginHostGhcOptions config)
+        mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr (pluginHostPackageIds config) (pluginHostSourceDirs config) (pluginHostGhcOptions config) (pluginWireFormat config)
   whenDebug config ("worker: " <> pluginWorkerPath config)
   callWorker config workerState (pluginWorkerPath config) workerRequest >>= \case
     Left err -> do

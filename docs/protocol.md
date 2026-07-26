@@ -3,10 +3,14 @@
 This document defines the initial protocol between the cross-side GHC plugin
 and the native host-side Template Haskell worker.
 
-The current protocol uses binary framing but still returns generated Haskell
-source fragments, not GHC AST values. The cross GHC parses the returned fragment
-with its own parser and continues normal renaming, typechecking, and code
-generation.
+The default protocol uses binary framing and returns generated Haskell source
+fragments. The cross GHC parses the returned fragment with its own parser and
+continues normal renaming, typechecking, and code generation.
+
+The optional `raw-th` wire format returns raw `template-haskell` AST values for
+supported splice kinds. This is intentionally a same-GHC-version mode: the host
+worker and cross-side plugin must use compatible GHC/template-haskell binary
+representations.
 
 ## Transport
 
@@ -27,9 +31,9 @@ Data.Binary-encoded payload bytes
 Worker diagnostics must go to stderr. Stdout is reserved for protocol
 responses.
 
-The first binary-framed payload is the existing `SpliceRequest` or
-`SpliceResponse` Haskell value encoded with `Data.Binary`. This avoids base64
-when later protocol revisions carry raw `template-haskell` AST values.
+The binary-framed payload is the `SpliceRequest` or `SpliceResponse` Haskell
+value encoded with `Data.Binary`. Raw `template-haskell` AST payloads are fields
+inside those binary values, so the transport does not need JSON or base64.
 
 ## Splice Kinds
 
@@ -77,6 +81,9 @@ Fields:
   forwarding target-like preprocessing options such as `-D`, `-U`, `-I`, and
   `-optP` so host-side `reify` observes the same CPP-shaped source as the
   cross-side compiler.
+- `wireFormat`: payload format requested by the plugin. `text` keeps the
+  textual fallback. `raw-th` asks the worker to return raw Template Haskell AST
+  payloads for supported splice kinds.
 
 ## Successful Response
 
@@ -102,6 +109,12 @@ textual format. It exists so the GHC 9.8.4 prototype can replay `AnnD`
 declarations generated through `addTopDecls`; host and cross GHC must agree on
 the relevant internal binary representation.
 
+`rawExpression` contains a `Data.Binary`-encoded `template-haskell` `Exp` value
+when `wireFormat=raw-th` is used for an expression splice. The cross-side plugin
+converts it with `convertToHsExpr` and injects the resulting parsed GHC syntax
+into the hidden `MetaResult` constructor supplied by GHC's `MetaRequest`.
+Unsupported raw splice kinds currently fall back to the textual result path.
+
 `diagnostics` contains diagnostics registered by host-side Template Haskell
 through `reportWarning` or `reportError`. In GHC 9.8.4 both operations are
 represented internally as `TcRnTHError (ReportCustomQuasiError isError message)`;
@@ -117,6 +130,8 @@ Fields:
 - `requestId`: request id copied from the request.
 - `status`: `"ok"`.
 - `generatedHaskell`: Haskell fragment to parse in the cross GHC process.
+- `rawExpression`: same-version raw Template Haskell expression payload, or
+  `null` for textual mode and non-expression splices.
 - `annotationWrapper`: same-version binary annotation-wrapper payload, or
   `null` for normal textual splice results.
 - `dependentFiles`: files to register in the cross GHC session as TH

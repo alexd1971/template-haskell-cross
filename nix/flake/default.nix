@@ -35,6 +35,7 @@ in
     {
       host-ghc984-worker = hs.hostHaskellPkgs.th-host-worker;
       host-ghc984-plugin = hs.hostHaskellPkgs.th-cross-plugin;
+      patched-ghc9103 = hs.patchedNativeGhc9103;
       host-ghc9103-worker = hs.hostGhc9103HaskellPkgs.th-host-worker;
       consumer-ghc9103-plugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
       consumer-ghc9103-ghc = hs.consumerGhc9103;

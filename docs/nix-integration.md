@@ -612,6 +612,18 @@ This is deliberately done outside the test executable. Calling `cabal build`
 from inside a `cabal test` process can wait on Cabal's own build/store locks and
 look like a hung test suite.
 
+Run the raw Template Haskell smoke test suite with the patched GHC 9.10.3
+worker:
+
+```bash
+th-cross-raw-test
+```
+
+The raw smoke fixture uses a constructor that is intentionally not exported by
+its defining module. Textual splice replay is expected to be fragile for this
+shape; `wire-format=raw-th` carries the resolved `TH.Name` in the binary
+payload and lets the cross-side compiler convert the raw `TH.Exp` directly.
+
 The build helper is equivalent to:
 
 ```bash

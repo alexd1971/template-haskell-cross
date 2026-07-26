@@ -14,6 +14,7 @@ module THCross.Protocol
   , SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
+  , WireFormat (..)
   , foreignSrcLangToStr
   , readRequest
   , readResponse
@@ -33,8 +34,10 @@ import Data.Binary.Get (Get, getWord32be, runGetOrFail)
 import Data.Binary.Put (Put, putWord32be, runPut)
 import qualified Data.ByteString.Lazy as BL
 import GHC.Tc.Types (ForeignSrcLang (..))
-import System.IO (Handle, hFlush)
+import GHCi.TH.Binary ()
+import qualified Language.Haskell.TH.Syntax as TH
 import Data.Word (Word32, Word8)
+import System.IO (Handle, hFlush)
 import THCross.SpliceKey (SpliceKey)
 
 -- | Diagnostic produced by host-side TH through @reportWarning@ or
@@ -109,6 +112,8 @@ getForeignSrcLang =
 data SpliceResult = SpliceResult
   { -- | Generated Haskell fragment parsed by the cross-side compiler.
     spliceResultHaskell :: !String
+  , -- | Raw Template Haskell expression payload for same-GHC raw mode.
+    spliceResultRawExpression :: !(Maybe TH.Exp)
   , -- | Binary-encoded 'GHC.Serialized.Serialized' for annotation wrappers.
     spliceResultAnnotationWrapper :: !(Maybe [Word8])
   , -- | Files registered through @addDependentFile@ while evaluating the splice.
@@ -125,13 +130,14 @@ data SpliceResult = SpliceResult
 instance Binary SpliceResult where
   put result = do
     put (spliceResultHaskell result)
+    put (spliceResultRawExpression result)
     put (spliceResultAnnotationWrapper result)
     put (spliceResultDependentFiles result)
     put (spliceResultForeignFiles result)
     put (spliceResultAddedTopDecls result)
     put (spliceResultDiagnostics result)
   get =
-    SpliceResult <$> get <*> get <*> get <*> get <*> get <*> get
+    SpliceResult <$> get <*> get <*> get <*> get <*> get <*> get <*> get
 
 -- | 1-based source span for the splice as seen by the cross GHC process.
 data SourceSpan = SourceSpan
@@ -199,6 +205,22 @@ spliceKindToStr PatternSplice = "pattern"
 spliceKindToStr DeclarationSplice = "declaration"
 spliceKindToStr AnnotationWrapperSplice = "annotation-wrapper"
 
+-- | Payload format requested by the cross-side plugin.
+data WireFormat
+  = TextualWireFormat
+  | RawTHWireFormat
+  deriving (Eq, Ord, Show)
+
+instance Binary WireFormat where
+  put = \case
+    TextualWireFormat -> put (0 :: Word8)
+    RawTHWireFormat -> put (1 :: Word8)
+  get =
+    get >>= \case
+      0 -> pure TextualWireFormat
+      1 -> pure RawTHWireFormat
+      tag -> fail ("unknown wire format tag: " <> show (tag :: Word8))
+
 -- | Request sent by the cross-side plugin to the native host worker.
 data SpliceRequest = SpliceRequest
   { -- | Correlation id echoed by the worker response.
@@ -225,6 +247,8 @@ data SpliceRequest = SpliceRequest
     requestHostSourceDirs :: ![FilePath]
   , -- | Extra GHC options applied to the host-side module load.
     requestHostGhcOptions :: ![String]
+  , -- | Payload format requested for supported splice results.
+    requestWireFormat :: !WireFormat
   }
   deriving (Eq, Show)
 
@@ -242,8 +266,9 @@ instance Binary SpliceRequest where
     put (requestHostPackageIds request)
     put (requestHostSourceDirs request)
     put (requestHostGhcOptions request)
+    put (requestWireFormat request)
   get =
-    SpliceRequest <$> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get
+    SpliceRequest <$> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get
 
 -- | Response returned by the native host worker.
 data SpliceResponse

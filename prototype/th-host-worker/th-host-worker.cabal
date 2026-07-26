@@ -11,6 +11,8 @@ executable th-host-worker
   hs-source-dirs:
       app
   default-language: Haskell2010
+  default-extensions:
+      CPP
   build-depends:
       base >= 4.19 && < 4.22
     , binary
@@ -22,6 +24,7 @@ executable th-host-worker
     , ghc-boot >= 9.8 && < 9.11
     , ghci
     , process
+    , template-haskell
     , th-cross-plugin
   ghc-options:
       -Wall

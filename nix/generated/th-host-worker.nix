@@ -1,5 +1,6 @@
 { mkDerivation, base, binary, bytestring, containers, directory
-, filepath, ghc, ghc-boot, ghci, lib, process, th-cross-plugin
+, filepath, ghc, ghc-boot, ghci, lib, process, template-haskell
+, th-cross-plugin
 }:
 mkDerivation {
   pname = "th-host-worker";
@@ -9,7 +10,7 @@ mkDerivation {
   isExecutable = true;
   executableHaskellDepends = [
     base binary bytestring containers directory filepath ghc ghc-boot
-    ghci process th-cross-plugin
+    ghci process template-haskell th-cross-plugin
   ];
   license = lib.meta.getLicenseFromSpdxId "BSD-3-Clause";
   mainProgram = "th-host-worker";

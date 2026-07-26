@@ -1,5 +1,6 @@
 module Integration.Harness
   ( CompileExpectation (..)
+  , CompileRunner (..)
   , ExpectedExit (..)
   , TestEnv (..)
   , compileNatively
@@ -10,8 +11,11 @@ module Integration.Harness
   , findProjectRoot
   ) where
 
-import Control.Monad (forM_, when)
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay)
+import Control.Monad (forM_, void, when)
 import Data.List (stripPrefix)
+import Data.Maybe (fromMaybe)
+import Text.Read (readMaybe)
 import System.Directory
   ( createDirectoryIfMissing
   , doesFileExist
@@ -23,10 +27,16 @@ import System.FilePath
   ( (</>)
   , takeDirectory
   )
+import System.IO (Handle, hClose, hGetContents, hPutStrLn, stderr)
 import System.Process
   ( CreateProcess (..)
+  , ProcessHandle
+  , StdStream (CreatePipe, NoStream)
+  , createProcess
+  , getProcessExitCode
+  , interruptProcessGroupOf
   , proc
-  , readCreateProcessWithExitCode
+  , terminateProcess
   )
 import Test.Tasty.HUnit (Assertion, assertFailure)
 
@@ -35,7 +45,12 @@ data TestEnv = TestEnv
   , testFixturesDir :: !FilePath
   , testWorkerPath :: !FilePath
   , testHostGhcLibDir :: !FilePath
+  , testCompileRunner :: !CompileRunner
   }
+
+data CompileRunner
+  = CabalExecGhc !FilePath !FilePath
+  | DirectGhc !FilePath
 
 data ExpectedExit
   = ExpectSuccess
@@ -102,35 +117,14 @@ runCompileSpec
           </> sanitizePathSegment (specLabel spec <> "-" <> specModulePath spec)
   createDirectoryIfMissing True testBuildDir
   let args =
-        cabalGlobalArgs (testProjectRoot testEnv)
-          <> [ "exec"
-             ]
-          <> cabalCommandArgs (testProjectRoot testEnv)
-          <> [ "--"
-             , "ghc"
-             , "-v0"
-             , "-fno-code"
-             , "-fforce-recomp"
-             , "-package"
-             , "th-cross-plugin"
-             , "-i" <> testFixturesDir testEnv
-             , "-outputdir"
-             , testBuildDir
-             , "-hidir"
-             , testBuildDir
-             , "-odir"
-             , testBuildDir
-             , "-stubdir"
-             , testBuildDir
-             ]
-          <> specGhcOptions spec
-          <> [specModulePath spec]
+        ghcArgs testEnv testBuildDir spec
   envVars <- getEnvironment
   let compileProcess =
-        (inProject (testFixturesDir testEnv) (proc "cabal" args))
-          { env = Just (("TH_HOST_GHC_LIBDIR", testHostGhcLibDir testEnv) : envVars)
+        (inProject (testFixturesDir testEnv) (compileProc testEnv args))
+          { env = Just (hostGhcLibDirEnv testEnv <> envVars)
           }
-  (exitCode, out, err) <- readCreateProcessWithExitCode compileProcess ""
+  compileTimeoutSeconds <- lookupTimeoutSeconds envVars
+  (exitCode, out, err) <- readCreateProcessWithTimeout compileTimeoutSeconds compileProcess
   let expectation = specExpectation spec
   checkExpectedExit (specLabel spec) (expectedExit expectation) exitCode out err
   checkOutputOccurrences "stdout" (specLabel spec) out (expectedStdout expectation)
@@ -142,6 +136,46 @@ workerPluginOptions testEnv =
   , "-fplugin-opt=THCross.Plugin:worker=" <> testWorkerPath testEnv
   , "-fplugin-opt=THCross.Plugin:debug"
   ]
+
+hostGhcLibDirEnv :: TestEnv -> [(String, String)]
+hostGhcLibDirEnv testEnv
+  | null (testHostGhcLibDir testEnv) = []
+  | otherwise = [("TH_HOST_GHC_LIBDIR", testHostGhcLibDir testEnv)]
+
+compileProc :: TestEnv -> [String] -> CreateProcess
+compileProc testEnv args =
+  case testCompileRunner testEnv of
+    DirectGhc ghc ->
+      proc ghc args
+    CabalExecGhc ghc ghcPkg ->
+      proc "cabal" (cabalExecArgs testEnv ghc ghcPkg <> ["--", "ghc"] <> args)
+
+ghcArgs :: TestEnv -> FilePath -> CompileSpec -> [String]
+ghcArgs testEnv testBuildDir spec =
+  [ "-v0"
+  , "-fno-code"
+  , "-fforce-recomp"
+  , "-package"
+  , "th-cross-plugin"
+  , "-i" <> testFixturesDir testEnv
+  , "-outputdir"
+  , testBuildDir
+  , "-hidir"
+  , testBuildDir
+  , "-odir"
+  , testBuildDir
+  , "-stubdir"
+  , testBuildDir
+  ]
+    <> specGhcOptions spec
+    <> [specModulePath spec]
+
+cabalExecArgs :: TestEnv -> FilePath -> FilePath -> [String]
+cabalExecArgs testEnv ghc ghcPkg =
+  cabalGlobalArgs (testProjectRoot testEnv)
+    <> ["exec"]
+    <> cabalCommandArgs (testProjectRoot testEnv)
+    <> cabalCompilerArgs ghc ghcPkg
 
 checkExpectedExit :: String -> ExpectedExit -> ExitCode -> String -> String -> Assertion
 checkExpectedExit testName expectedExitStatus exitCode out err =
@@ -221,8 +255,69 @@ findProjectRoot = do
             else go parent
 
 inProject :: FilePath -> CreateProcess -> CreateProcess
-inProject projectRoot createProcess =
-  createProcess {cwd = Just projectRoot}
+inProject projectRoot createProcessSpec =
+  createProcessSpec {cwd = Just projectRoot}
+
+lookupTimeoutSeconds :: [(String, String)] -> IO Int
+lookupTimeoutSeconds envVars =
+  pure
+    ( fromMaybe
+        120
+        (lookup "TH_CROSS_TEST_TIMEOUT_SECONDS" envVars >>= readMaybe)
+    )
+
+readCreateProcessWithTimeout :: Int -> CreateProcess -> IO (ExitCode, String, String)
+readCreateProcessWithTimeout timeoutSeconds createProcessSpec = do
+  (_, Just stdoutHandle, Just stderrHandle, processHandle) <-
+    createProcess
+      createProcessSpec
+        { std_in = NoStream
+        , std_out = CreatePipe
+        , std_err = CreatePipe
+        , create_group = True
+        }
+  stdoutVar <- newEmptyMVar
+  stderrVar <- newEmptyMVar
+  void (forkIO (hGetContentsStrict stdoutHandle >>= putMVar stdoutVar))
+  void (forkIO (hGetContentsStrict stderrHandle >>= putMVar stderrVar))
+  result <- waitForProcessWithTimeout timeoutSeconds processHandle
+  case result of
+    Just exitCode -> do
+      out <- takeMVar stdoutVar
+      err <- takeMVar stderrVar
+      pure (exitCode, out, err)
+    Nothing -> do
+      hPutStrLn stderr ("integration harness: process timed out after " <> show timeoutSeconds <> "s")
+      interruptProcessGroupOf processHandle
+      terminateProcess processHandle
+      hClose stdoutHandle
+      hClose stderrHandle
+      pure
+        ( ExitFailure 124
+        , ""
+        , "process timed out after " <> show timeoutSeconds <> "s\n"
+        )
+
+waitForProcessWithTimeout :: Int -> ProcessHandle -> IO (Maybe ExitCode)
+waitForProcessWithTimeout timeoutSeconds processHandle =
+  go (timeoutSeconds * 10)
+  where
+    go remainingPolls = do
+      result <- getProcessExitCode processHandle
+      case result of
+        Just exitCode ->
+          pure (Just exitCode)
+        Nothing
+          | remainingPolls <= 0 ->
+              pure Nothing
+          | otherwise -> do
+              threadDelay 100000
+              go (remainingPolls - 1)
+
+hGetContentsStrict :: Handle -> IO String
+hGetContentsStrict handle = do
+  text <- hGetContents handle
+  length text `seq` pure text
 
 cabalGlobalArgs :: FilePath -> [String]
 cabalGlobalArgs projectRoot =
@@ -236,10 +331,14 @@ cabalCommandArgs projectRoot =
   , projectRoot
   , "--builddir"
   , "dist-newstyle-nix"
-  , "--with-compiler"
-  , "ghc-9.8.4"
+  ]
+
+cabalCompilerArgs :: FilePath -> FilePath -> [String]
+cabalCompilerArgs ghc ghcPkg =
+  [ "--with-compiler"
+  , ghc
   , "--with-hc-pkg"
-  , "ghc-9.8.4-pkg"
+  , ghcPkg
   ]
 
 sanitizePathSegment :: String -> FilePath

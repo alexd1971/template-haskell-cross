@@ -40,11 +40,13 @@ let
         pkgs.callPackage ../th-cross-plugin.nix {
           callPackage = selfH.callPackage;
           haskellLib = pkgs.haskell.lib;
+          hostGhc = selfH.ghc;
         };
       th-host-worker =
         pkgs.callPackage ../th-host-worker.nix {
           callPackage = selfH.callPackage;
           haskellLib = pkgs.haskell.lib;
+          hostGhc = pkgs.haskell.compiler.ghc984;
           hostGhcLibDir = "${pkgs.haskell.compiler.ghc984}/lib/ghc-9.8.4/lib";
           th-cross-plugin = selfH.th-cross-plugin;
         };
@@ -60,6 +62,7 @@ let
         pkgs.callPackage ../th-cross-plugin.nix {
           callPackage = selfH.callPackage;
           haskellLib = pkgs.haskell.lib;
+          hostGhc = selfH.ghc;
         };
       th-consumer-example =
         selfH.callPackage ../generated/th-consumer-example.nix { };
@@ -77,11 +80,13 @@ let
           pkgs.callPackage ../th-cross-plugin.nix {
             callPackage = selfH.callPackage;
             haskellLib = pkgs.haskell.lib;
+            hostGhc = selfH.ghc;
           };
         th-host-worker =
           pkgs.callPackage ../th-host-worker.nix {
             callPackage = selfH.callPackage;
             haskellLib = pkgs.haskell.lib;
+            hostGhc = patchedNativeGhc9103;
             hostGhcLibDir = "${patchedNativeGhc9103}/lib/ghc-9.10.3/lib";
             th-cross-plugin = selfH.th-cross-plugin;
           };
@@ -91,7 +96,7 @@ let
   nixTools = pkgs.haskell.packages.ghc9103.callPackage ../th-cross-nix-tools.nix { };
 in
 {
-  inherit hostHaskellPkgs hostGhc9103HaskellPkgs consumerGhc9103HaskellPkgs nixTools;
+  inherit patchedNativeGhc9103 hostHaskellPkgs hostGhc9103HaskellPkgs consumerGhc9103HaskellPkgs nixTools;
 
   consumerGhc9103 = consumerGhc9103HaskellPkgs.ghcWithPackages (hpkgs: [
     hpkgs.th-cross-plugin
