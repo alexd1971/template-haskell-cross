@@ -79,9 +79,8 @@ Relevant source paths:
 | --- | --- | --- |
 | Dynamic compiler state | `compiler/GHC/Driver/DynFlags.hs` | `DynFlags`, `targetPlatform`, `toolSettings`, `platformMisc` |
 | Platform | `compiler/GHC/Platform.hs` | `Platform`, `platformArch`, `platformOS` |
-| Parser options | `compiler/GHC/Parser/Lexer.x` and `compiler/GHC/Parser.hs` | parser state and options derived from `DynFlags` |
 | TH worker | `prototype/th-host-worker/app/Worker/Evaluate.hs` | `captureModuleSplices`, `workerDynFlags` |
-| Cross parser | `prototype/th-cross-plugin/src/THCross/ParseFragment.hs` | uses cross-side `getDynFlags` |
+| Cross TH conversion | `prototype/th-cross-plugin/src/THCross/Plugin.hs` | converts raw TH payloads with cross-side GHC |
 
 `DynFlags` contains:
 

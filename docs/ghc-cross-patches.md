@@ -1,6 +1,6 @@
 # GHC Cross-Compiler Patches for `-fplugin-library`
 
-This document describes the three changes required to make a cross-GHC
+This document describes the GHC changes required to make a cross-GHC
 load a native plugin through `-fplugin-library` and delegate Template
 Haskell evaluation to the build-host worker.
 
@@ -19,12 +19,12 @@ on the build host instead:
 1. loading a **native plugin** into the cross-GHC process via
    `-fplugin-library`;
 2. the plugin intercepts `runMetaHook` and delegates splice evaluation
-   to a **native host worker** (GHC 9.8.4);
-3. the worker returns textual Haskell fragments;
-4. the cross compiler parses them locally and continues normal
+   to a **native host worker** built with the same patched GHC 9.10.3;
+3. the worker returns binary-encoded Template Haskell AST values;
+4. the cross compiler converts them locally and continues normal
    compilation.
 
-Three obstacles stand between plain nixpkgs cross-GHC and this flow.
+Plain nixpkgs cross-GHC needs the following patches for this flow.
 
 ---
 
@@ -124,6 +124,29 @@ altogether.
 **Can this be contributed to GHC?**  This is a standalone bugfix: an
 empty finalizer list should never require an interpreter.  Can be
 submitted independently of the TH cross work.
+
+---
+
+## P4 — Export raw TH runners and capture raw `addTopDecls`
+
+**File**: `nix/patches/ghc-9.10.3-export-runth.patch`
+
+**What**:
+
+- exports `runTHExp`, `runTHPat`, `runTHType`, and `runTHDec` from
+  `GHC.Tc.Gen.Splice`;
+- adds `tcg_th_topdecls_th :: TcRef [TH.Dec]` to `TcGblEnv`;
+- initializes that ref in `GHC.Tc.Utils.Monad.initTc`;
+- records the original `[TH.Dec]` payload in `qAddTopDecls`.
+
+**Why**: The worker needs to stop after host-side TH execution and return raw
+Template Haskell AST values. Pretty-printed Haskell is not a reliable transport
+format for exact names or references to entities from hidden/internal modules.
+Capturing raw `addTopDecls` payloads removes the remaining textual replay path.
+
+**Can this be contributed to GHC?**  The export-list part is a small API
+exposure. The additional raw `addTopDecls` ref is prototype-specific unless
+GHC grows a supported hook for observing TH side effects before conversion.
 
 ---
 

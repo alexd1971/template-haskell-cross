@@ -1,9 +1,47 @@
 --- a/compiler/GHC/Tc/Gen/Splice.hs
 +++ b/compiler/GHC/Tc/Gen/Splice.hs
-@@ -23,6 +23,7 @@ module GHC.Tc.Gen.Splice(
+@@ -23,5 +23,6 @@ module GHC.Tc.Gen.Splice(
       runMetaE, runMetaP, runMetaT, runMetaD, runQuasi,
       tcTopSpliceExpr, lookupThName_maybe,
       defaultRunMeta, runMeta', runRemoteModFinalizers,
 +     runTHExp, runTHPat, runTHType, runTHDec,
       finishTH, runTopSplice
        ) where
+@@ -1457,6 +1458,8 @@ instance TH.Quasi TcM where
+       mapM_ (checkTopDecl . unLoc) ds
+       th_topdecls_var <- fmap tcg_th_topdecls getGblEnv
+       updTcRef th_topdecls_var (\topds -> ds ++ topds)
++      th_topdecls_th_var <- fmap tcg_th_topdecls_th getGblEnv
++      updTcRef th_topdecls_th_var (\topds -> thds ++ topds)
+     where
+      checkTopDecl :: HsDecl GhcPs -> TcM ()
+      checkTopDecl (ValD _ binds)
+--- a/compiler/GHC/Tc/Module.hs
++++ b/compiler/GHC/Tc/Module.hs
+@@ -618 +618,3 @@ tcRnSrcDecls ds
+-      ; writeTcRef th_topdecls_var []
++      ; writeTcRef th_topdecls_var []
++      ; th_topdecls_th_var <- fmap tcg_th_topdecls_th getGblEnv
++      ; writeTcRef th_topdecls_th_var []
+--- a/compiler/GHC/Tc/Types.hs
++++ b/compiler/GHC/Tc/Types.hs
+@@ -179 +179,2 @@ import Data.Typeable ( TypeRep )
+-import Data.Maybe    ( mapMaybe )
++import Data.Maybe    ( mapMaybe )
++import qualified Language.Haskell.TH as TH
+@@ -567 +568,4 @@ data TcGblEnv
+-        -- ^ Top-level declarations from addTopDecls
++        -- ^ Top-level declarations from addTopDecls
++
++        tcg_th_topdecls_th :: TcRef [TH.Dec],
++        -- ^ Raw Template Haskell declarations from addTopDecls
+--- a/compiler/GHC/Tc/Utils/Monad.hs
++++ b/compiler/GHC/Tc/Utils/Monad.hs
+@@ -265 +265,2 @@ initTc hsc_env hsc_src keep_rn_syntax mod loc do_this
+-        th_topdecls_var      <- newIORef [] ;
++        th_topdecls_var      <- newIORef [] ;
++        th_topdecls_th_var   <- newIORef [] ;
+@@ -296 +297,2 @@ initTc hsc_env hsc_src keep_rn_syntax mod loc do_this
+-                tcg_th_topdecls      = th_topdecls_var,
++                tcg_th_topdecls      = th_topdecls_var,
++                tcg_th_topdecls_th   = th_topdecls_th_var,

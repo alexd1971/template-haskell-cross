@@ -33,8 +33,6 @@ in
       };
     in
     {
-      host-ghc984-worker = hs.hostHaskellPkgs.th-host-worker;
-      host-ghc984-plugin = hs.hostHaskellPkgs.th-cross-plugin;
       patched-ghc9103 = hs.patchedNativeGhc9103;
       host-ghc9103-worker = hs.hostGhc9103HaskellPkgs.th-host-worker;
       consumer-ghc9103-plugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
@@ -42,7 +40,7 @@ in
       consumer-ghc9103-package = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
       th-cross-nix-tools = hs.nixTools;
       aarch64-linux-cross-probe = aarch64LinuxCrossProbe;
-      default = hs.hostHaskellPkgs.th-host-worker;
+      default = hs.hostGhc9103HaskellPkgs.th-host-worker;
     }
     # Experiment packages are merged after the base packages so their public
     # attribute names stay local to the experiment module.

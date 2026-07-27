@@ -3,14 +3,18 @@
 This document defines the initial protocol between the cross-side GHC plugin
 and the native host-side Template Haskell worker.
 
-The default protocol uses binary framing and returns generated Haskell source
-fragments. The cross GHC parses the returned fragment with its own parser and
-continues normal renaming, typechecking, and code generation.
-
-The optional `raw-th` wire format returns raw `template-haskell` AST values for
-supported splice kinds. This is intentionally a same-GHC-version mode: the host
-worker and cross-side plugin must use compatible GHC/template-haskell binary
+The protocol returns raw `template-haskell` AST values for supported splice
+kinds. This is intentionally a same-GHC-version mode: the host worker and
+cross-side plugin must use compatible GHC/template-haskell binary
 representations.
+
+The earlier textual-fragment protocol is legacy. It evaluated TH on the host,
+pretty-printed the resulting TH/GHC AST as Haskell source, and parsed that
+source in the cross GHC. That approach is not sufficient for real packages:
+for example, `aeson` TH can produce references that require constructors or
+helpers from non-exported/internal modules. Pretty-printed Haskell cannot
+reliably express those resolved names at the consumer site, so textual replay
+was removed from the runtime protocol.
 
 ## Transport
 
@@ -81,10 +85,6 @@ Fields:
   forwarding target-like preprocessing options such as `-D`, `-U`, `-I`, and
   `-optP` so host-side `reify` observes the same CPP-shaped source as the
   cross-side compiler.
-- `wireFormat`: payload format requested by the plugin. `text` keeps the
-  textual fallback. `raw-th` asks the worker to return raw Template Haskell AST
-  payloads for supported splice kinds.
-
 ## Successful Response
 
 `dependentFiles` contains files registered by host-side Template Haskell through
@@ -98,28 +98,38 @@ session so the target-side build can compile/link them.
 `language` is one of `c`, `cxx`, `objc`, `objcxx`, `asm`, `js`, or
 `raw-object`.
 
-`addedTopDecls` contains top-level declarations registered by host-side Template
-Haskell through `addTopDecls`, rendered as textual Haskell. The cross-side plugin
-parses this fragment and appends the resulting declarations to
-`tcg_th_topdecls`.
+`addedTopDecls` contains raw `TH.Dec` values registered by host-side Template
+Haskell through `addTopDecls`. The patched host GHC records these values before
+converting them to `GhcPs`. The cross-side plugin converts the same raw payload
+locally and appends it to `tcg_th_topdecls`, or grafts it into a declaration
+splice result. For replayed non-declaration splices it also mirrors GHC's
+`tcg_th_topnames` update for exact binders. This preserves exact `NameU`
+relationships between declarations introduced by `addTopDecls` and the normal
+splice result.
 
 `annotationWrapper` contains a binary-encoded GHC `Serialized` value used only
 for `annotation-wrapper` responses. This is intentionally not a cross-version
-textual format. It exists so the GHC 9.8.4 prototype can replay `AnnD`
-declarations generated through `addTopDecls`; host and cross GHC must agree on
-the relevant internal binary representation.
+format. It exists so the prototype can replay `AnnD` declarations generated
+through `addTopDecls`; host and cross GHC must agree on the relevant internal
+binary representation.
 
-`rawExpression` contains a `Data.Binary`-encoded `template-haskell` `Exp` value
-when `wireFormat=raw-th` is used for an expression splice. The cross-side plugin
-converts it with `convertToHsExpr` and injects the resulting parsed GHC syntax
-into the hidden `MetaResult` constructor supplied by GHC's `MetaRequest`.
-Unsupported raw splice kinds currently fall back to the textual result path.
+Raw payload fields contain `Data.Binary`-encoded `template-haskell` AST values
+for normal splice results:
+
+- `expression`: `TH.Exp` for expression splices.
+- `pattern`: `TH.Pat` for pattern splices.
+- `type`: `TH.Type` for type splices.
+- `declarations`: `[TH.Dec]` for declaration splices.
+
+The cross-side plugin converts them with `convertToHsExpr`, `convertToPat`,
+`convertToHsType`, or `convertToHsDecls` and injects the resulting parsed GHC
+syntax into the hidden `MetaResult` constructor supplied by GHC's `MetaRequest`.
 
 `diagnostics` contains diagnostics registered by host-side Template Haskell
-through `reportWarning` or `reportError`. In GHC 9.8.4 both operations are
-represented internally as `TcRnTHError (ReportCustomQuasiError isError message)`;
-the `isError` flag distinguishes warning from error. The cross-side plugin
-replays those diagnostics into the current GHC session.
+through `reportWarning` or `reportError`. The worker extracts
+`TcRnTHError (ReportCustomQuasiError isError message)` entries; the `isError`
+flag distinguishes warning from error. The cross-side plugin replays those
+diagnostics into the current GHC session.
 
 Diagnostic entry:
 
@@ -129,16 +139,17 @@ Fields:
 
 - `requestId`: request id copied from the request.
 - `status`: `"ok"`.
-- `generatedHaskell`: Haskell fragment to parse in the cross GHC process.
-- `rawExpression`: same-version raw Template Haskell expression payload, or
-  `null` for textual mode and non-expression splices.
+- `expression`: same-version Template Haskell expression payload.
+- `pattern`: same-version Template Haskell pattern payload.
+- `type`: same-version Template Haskell type payload.
+- `declarations`: same-version Template Haskell declaration payload.
 - `annotationWrapper`: same-version binary annotation-wrapper payload, or
-  `null` for normal textual splice results.
+  `null` for normal splice results.
 - `dependentFiles`: files to register in the cross GHC session as TH
   dependencies.
 - `foreignFiles`: foreign files to register in the cross GHC session.
-- `addedTopDecls`: textual declarations to register in cross-side
-  `tcg_th_topdecls`.
+- `addedTopDecls`: same-version Template Haskell declarations to register in
+  cross-side `tcg_th_topdecls`.
 - `diagnostics`: host-side TH diagnostics to replay in the cross GHC session.
 
 ## Error Response

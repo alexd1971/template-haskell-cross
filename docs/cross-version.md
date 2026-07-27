@@ -11,13 +11,21 @@ useful context for understanding earlier design choices, but it is now legacy.
 Current status:
 
 ```text
-supported plugin GHCs: 9.8 <= GHC < 9.11
+supported plugin GHCs: 9.10 <= GHC < 9.11
 active consumer GHC:   9.10.3
-active worker GHC:     9.8.4
-current payload:       textual generated Haskell over binary framing
-planned payload:       same-GHC Binary Template Haskell AST
-cross-version support: legacy/transitional, not a production goal
+active worker GHC:     patched 9.10.3
+current payload:       same-GHC Binary Template Haskell AST
+textual payload:       rejected legacy experiment
+cross-version support: not a production goal
 ```
+
+The textual experiment was rejected because pretty-printed Haskell is not a
+complete representation of TH results. Real packages can generate references to
+names whose constructors or helper functions live in internal/non-exported
+modules. `aeson` TH exposes this failure mode: the generated source can require
+entities that the consumer module cannot legally import or reference. Raw TH AST
+transport preserves resolved `TH.Name`s and avoids forcing the result through a
+source-level API boundary.
 
 ## Goal
 
@@ -109,14 +117,14 @@ The question was whether the plugin could be built against GHC 9.4.8 and
 whether the cross-version protocol held.
 
 This path is now historical. The plugin package intentionally requires
-`ghc >= 9.8` to remove compatibility CPP from production code and to prepare
-for the same-GHC raw Template Haskell AST protocol.
+GHC 9.10.x and the active protocol requires the plugin, worker, and
+`template-haskell` package to come from the same patched GHC.
 
 ### API Compatibility
 
-GHC 9.4.8 exposes `runMetaHook` with the same `MetaHook` shape as 9.8.4.
+For the legacy textual experiment, GHC 9.4.8 exposed `runMetaHook` with the same `MetaHook` shape as 9.8.4.
 All basic `MetaRequest` constructors (`MetaE`, `MetaP`, `MetaT`, `MetaD`,
-`MetaAW`) are present.  The fragment parser entrypoints are also available.
+`MetaAW`) were present.
 Two minor differences required `CPP` in the plugin:
 
 - `LangJs` does not exist in GHC 9.4.8's `ForeignSrcLang`;

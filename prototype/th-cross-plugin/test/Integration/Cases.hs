@@ -49,6 +49,29 @@ testTrees testEnv =
               }
       ]
   , testGroup
+      "exact-name payloads"
+      [ testCase "hidden constructor expression" $
+          compileWithPlugin
+            testEnv
+            "RawHiddenConstructor.hs"
+            expectSuccess
+      , testCase "hidden constructor pattern" $
+          compileWithPlugin
+            testEnv
+            "RawHiddenPattern.hs"
+            expectSuccess
+      , testCase "hidden type" $
+          compileWithPlugin
+            testEnv
+            "RawHiddenType.hs"
+            expectSuccess
+      , testCase "hidden constructor declaration" $
+          compileWithPlugin
+            testEnv
+            "RawHiddenDeclaration.hs"
+            expectSuccess
+      ]
+  , testGroup
       "target-context"
       [ testGroup
           "forwarded-cpp-define"
@@ -58,9 +81,6 @@ testTrees testEnv =
                 "CppTargetContext.hs"
                 targetCppOptions
                 expectSuccess
-                  { expectedStdout =
-                      [("generated-haskell: TargetPlatform", 1)]
-                  }
           , testCase "native" $
               compileNativelyWithOptions
                 testEnv
@@ -212,15 +232,12 @@ addTopDeclsTests testEnv =
             compileNatively testEnv "AddTopDeclsTypedSplice.hs" expectSuccess
         ]
     , testGroup
-        "exact name reference"
+        "exact name reference through addTopDecls"
         [ testCase "plugin" $
             compileWithPlugin
               testEnv
               "AddTopDeclsExactName.hs"
               expectSuccess
-                { expectedStdout =
-                    [("th-cross: added top decls 2", 1)]
-                }
         , testCase "native" $
             compileNatively testEnv "AddTopDeclsExactName.hs" expectSuccess
         ]

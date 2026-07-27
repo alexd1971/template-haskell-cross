@@ -354,7 +354,9 @@ Direct reuse:
   ExactPrint, and ghcide compatibility modules.
 
 th-cross equivalent:
-  our ParseFragment module already implements the cross-side parse step.
+  the active protocol no longer uses a cross-side declaration-fragment parser.
+  The host worker sends raw TH payloads, including raw declarations captured
+  from `addTopDecls`, and the cross-side plugin converts them with `GHC.ThToHs`.
 ```
 
 ## Parsing and Grafting Helpers

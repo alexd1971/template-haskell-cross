@@ -5,20 +5,20 @@ prototype.
 
 ## Current Approach
 
-The worker evaluates expression and declaration splices by loading the source
-module in a native GHC session.
+The worker evaluates Template Haskell splices by loading the source module in a
+native patched GHC session.
 
 Flow:
 
 ```text
-worker receives expression/declaration splice request
-  -> run native GHC 9.8.4
+worker receives splice request
+  -> run native patched GHC 9.10.3
   -> install host-only runMetaHook
   -> load request.sourceFile
-  -> defaultRunMeta executes TH normally
-  -> hook captures generated GhcPs expansion
-  -> worker pretty-prints the captured expansion
-  -> worker returns generatedHaskell over the binary-framed protocol
+  -> runMeta' executes TH normally
+  -> hook captures raw TH.Exp/TH.Pat/TH.Type/[TH.Dec]
+  -> worker converts the raw payload back to GhcPs for native compilation
+  -> worker returns raw TH AST over the binary-framed protocol
 ```
 
 This replaces the earlier Task 7 isolated `runghc` splice-eval file. The old

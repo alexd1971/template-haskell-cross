@@ -14,8 +14,7 @@ import System.IO
   , stdout
   )
 import THCross.Protocol
-  ( SpliceKind (..)
-  , SpliceRequest (..)
+  ( SpliceRequest
   , SpliceResponse (..)
   , readRequest
   , writeResponse
@@ -58,21 +57,10 @@ handleFrame cache = do
     Right request ->
       handleRequest cache request
 
--- | Dispatch by splice kind.
+-- | Evaluate one splice request.
 --
--- The prototype currently evaluates all basic splice kinds. Annotation wrappers
--- are served from captures produced while replaying declaration splices with
--- AnnD; they are intentionally same-GHC-version only.
+-- Splice-kind-specific behavior lives in "Worker.Evaluate", where the host GHC
+-- runMetaHook can return the correctly shaped raw TH payload.
 handleRequest :: EvaluationCache -> SpliceRequest -> IO SpliceResponse
 handleRequest cache request =
-  case requestSpliceKind request of
-    ExpressionSplice ->
-      evaluateModuleSplice cache request
-    TypeSplice ->
-      evaluateModuleSplice cache request
-    PatternSplice ->
-      evaluateModuleSplice cache request
-    DeclarationSplice ->
-      evaluateModuleSplice cache request
-    AnnotationWrapperSplice ->
-      evaluateModuleSplice cache request
+  evaluateModuleSplice cache request

@@ -3,7 +3,8 @@
 let
   # This experiment checks the current promising route for a real cross-GHC:
   # load a native plugin into an aarch64 cross compiler through `-fplugin-library`
-  # and let that plugin delegate TH execution to the GHC 9.8.4 host worker.
+  # and let that plugin delegate TH execution to the patched GHC 9.10.3 host
+  # worker.
 
   # Read the native plugin package metadata in the same vocabulary GHC uses.
   # `-fplugin-library` still wants a concrete shared object path, so derive it
@@ -31,7 +32,7 @@ let
       consumerPlugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
       pluginLibDir = "${consumerPlugin}/lib/ghc-9.10.3";
       nativeGhcPkg = "${pkgs.haskell.compiler.ghc9103}/bin/ghc-pkg";
-      defaultWorker = "${hs.hostHaskellPkgs.th-host-worker}/bin/th-host-worker";
+      defaultWorker = "${hs.hostGhc9103HaskellPkgs.th-host-worker}/bin/th-host-worker";
 
       componentDependencyFields = [
         "libraryHaskellDepends"
@@ -66,19 +67,19 @@ let
               (componentHaskellDependsFromCabalDeps cabalDeps)));
 
       # Real TH generators often live in dependencies. The worker evaluates
-      # splices with native GHC 9.8.4, so give it a host-side package DB that
-      # mirrors the target component dependencies by package name.
+      # splices with native patched GHC 9.10.3, so give it a host-side package
+      # DB that mirrors the target component dependencies by package name.
       mkWorkerWithHostPackages =
         hostPackageNames:
         if hostPackageNames == [ ] then
           {
             worker = defaultWorker;
-            hostGhcPkg = "${pkgs.haskell.compiler.ghc984}/bin/ghc-pkg";
+            hostGhcPkg = "${hs.patchedNativeGhc9103}/bin/ghc-pkg";
           }
         else
           let
             hostGhcWithPackages =
-              pkgs.haskell.packages.ghc984.ghcWithPackages
+              hs.hostGhc9103HaskellPkgs.ghcWithPackages
                 (hpkgs: map (packageName: hpkgs.${packageName}) hostPackageNames);
           in
           {
@@ -92,9 +93,9 @@ let
             ''
               mkdir -p "$out/bin"
               makeWrapper \
-                ${hs.hostHaskellPkgs.th-host-worker}/bin/.th-host-worker-wrapped \
+                ${hs.hostGhc9103HaskellPkgs.th-host-worker}/bin/.th-host-worker-wrapped \
                 "$out/bin/th-host-worker" \
-                --set TH_HOST_GHC_LIBDIR "${hostGhcWithPackages}/lib/ghc-9.8.4/lib"
+                --set TH_HOST_GHC_LIBDIR "${hostGhcWithPackages}/lib/ghc-9.10.3/lib"
             ''}/bin/th-host-worker";
             hostGhcPkg = "${hostGhcWithPackages}/bin/ghc-pkg";
           };
@@ -120,7 +121,7 @@ let
       # package during `Setup configure`.
       #
       # `expectedHostPackageNames` comes from nixpkgs' evaluation-time
-      # `getCabalDeps` metadata and is used to build the host GHC 9.8.4 package
+      # `getCabalDeps` metadata and is used to build the host GHC 9.10.3 package
       # environment.
       #
       # `excludedPackageNames` contains package names that may appear in

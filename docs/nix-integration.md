@@ -19,13 +19,13 @@ cross package set:
 ```
 
 The first implementation step is intentionally smaller: prove the local Nix
-shape before adding Android or haskell.nix cross details. The current flake has
-two roles:
+shape before adding Android or haskell.nix cross details. The current active
+flake path has two roles:
 
-- `hostHaskellPkgs`: native host-side Haskell package set, currently GHC 9.8.4;
+- `hostGhc9103HaskellPkgs`: native host-side worker package set, built with a
+  patched GHC 9.10.3;
 - `consumerGhc9103HaskellPkgs`: the Haskell package set that consumes
   `THCross.Plugin`, currently native GHC 9.10.3.
-  the consumer-side plugin.
 
 The consumer package sets are deliberately named by role and GHC version rather
 than by target. They mark the places where a future cross target package set
@@ -41,8 +41,6 @@ be introduced later as a separate target package set.
 `flake.nix` exposes:
 
 ```text
-packages.${system}.host-ghc984-worker
-packages.${system}.host-ghc984-plugin
 packages.${system}.host-ghc9103-worker
 packages.${system}.cross-ghc9103-aarch64-linux
 packages.${system}.consumer-ghc9103-cross-generic-package
@@ -64,13 +62,10 @@ apps.${system}.regen-cabal-nix
 The package split mirrors the intended cross architecture, but still runs on one
 host architecture:
 
-- `host-ghc984-worker` comes from `hostHaskellPkgs` and is built with GHC 9.8.4;
-- `host-ghc984-plugin` is the GHC 9.8.4 plugin build used by the local
-  prototype;
 - `host-ghc9103-worker` is built with a native patched GHC 9.10.3 that exports
   `runTHExp`, `runTHPat`, `runTHType`, and `runTHDec` from
-  `GHC.Tc.Gen.Splice`. It is reserved for the upcoming same-GHC raw Template
-  Haskell AST protocol path;
+  `GHC.Tc.Gen.Splice`. This is the active host worker for the raw Template
+  Haskell AST protocol;
 - `cross-ghc9103-aarch64-linux` — рабочий кросс-GHC 9.10.3 для
   `aarch64-linux` с тремя патчами (см. `docs/ghc-cross-patches.md`),
   поддерживающий загрузку плагина через `-fplugin-library`;
@@ -85,7 +80,7 @@ host architecture:
 - `consumer-ghc9103-cross-microlens-package` builds
   `th-microlens-consumer`, a small package that depends on the real
   `microlens-th` generator package and runs a declaration splice
-  `makeLenses ''User` through the GHC 9.8.4 host worker while cross-compiling
+  `makeLenses ''User` through the host worker while cross-compiling
   the package with the patched aarch64 GHC 9.10.3;
 - `consumer-ghc9103-cross-executable-package` builds
   `th-executable-consumer`, a package with a library component and an
@@ -101,7 +96,7 @@ host architecture:
 - `consumer-ghc9103-ghc` is a `consumerGhc9103HaskellPkgs` GHC environment
   containing `th-cross-plugin`;
 - `checks.${system}.consumer-ghc9103-worker-smoke` compiles `Example.hs` with
-  `consumer-ghc9103-ghc` and passes the Nix-built GHC 9.8.4 worker path to the
+  `consumer-ghc9103-ghc` and passes the Nix-built patched GHC 9.10.3 worker to the
   plugin.
 - `consumer-ghc9103-package` is a minimal Cabal package from
   `consumerGhc9103HaskellPkgs` compiled natively with the standard GHC TH
@@ -114,10 +109,10 @@ host architecture:
 The Nix worker derivation wraps `th-host-worker` with:
 
 ```text
-TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.8.4/lib/ghc-9.8.4/lib
+TH_HOST_GHC_LIBDIR=/nix/store/...-patched-ghc-9.10.3/lib/ghc-9.10.3/lib
 ```
 
-This prevents the worker from discovering the consumer GHC 9.10.3 via `PATH`
+This prevents the worker from discovering an unrelated GHC via `PATH`
 while evaluating host-side TH.
 The libdir is passed explicitly from `nix/flake/haskell-pkgs.nix`; it is not
 inferred from a generic `ghc` argument in the worker wrapper, because that can
@@ -129,13 +124,13 @@ prototype, the wrapper first instantiates the package normally with nixpkgs'
 Haskell builder and reads its `passthru.getCabalDeps`. That exposes concrete
 dependency derivations grouped by component-specific `*HaskellDepends` fields.
 The integration extracts each dependency's Haskell `pname`, filters out boot
-packages such as `base` and `template-haskell`, and builds a GHC 9.8.4
+packages such as `base` and `template-haskell`, and builds a GHC 9.10.3
 `ghcWithPackages` environment for those names. For example,
 `consumer-ghc9103-cross-microlens-package` derives `microlens` and
 `microlens-th`, then passes the matching libdir to the worker wrapper:
 
 ```text
-TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.8.4-with-packages/lib/ghc-9.8.4/lib
+TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.10.3-with-packages/lib/ghc-9.10.3/lib
 ```
 
 The same derived names are resolved through the host GHC package DB with
@@ -156,7 +151,7 @@ prototype path is exact unit-id data from the cross-side plugin.
 This uses nixpkgs' own evaluation-time Haskell dependency metadata instead of
 parsing the `.cabal` file directly. It still assumes that each extracted package
 `pname` is available under the same attribute name in
-`pkgs.haskell.packages.ghc984`. Resolving the final GHC unit id through host
+the GHC 9.10.3 host package set. Resolving the final GHC unit id through host
 `ghc-pkg` avoids ambiguity between multiple installed instances, but the
 surrounding package selection is not yet a complete Cabal component context
 model.
@@ -243,7 +238,7 @@ by the package derivation. Nix-level validation is handled by
 Build the native worker:
 
 ```bash
-nix build .#host-ghc984-worker
+nix build .#host-ghc9103-worker
 ```
 
 Build the consumer-side plugin with GHC 9.10.3:
@@ -544,24 +539,14 @@ otherwise GHC can compile modules but fail during linking with errors such as
 Inside `nix develop`, the shell provides versioned wrappers:
 
 ```text
-ghc-9.8.4
-ghc-9.8.4-pkg
 ghc-9.10.3
 ghc-9.10.3-pkg
 th-cross-build
 th-cross-test
 ```
 
-The shell also exports:
-
-```text
-TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.8.4/lib/ghc-9.8.4/lib
-```
-
-Integration tests require this variable so the host worker always initializes
-the Nix-provided GHC 9.8.4 session. Running `cabal test` manually is supported,
-but it should be done from inside `nix develop`; otherwise the test runner fails
-early instead of accidentally discovering another GHC from `PATH`.
+The test helpers use the Nix-built wrapped `host-ghc9103-worker`, so callers do
+not need to set `TH_HOST_GHC_LIBDIR` manually.
 
 The helper scripts use a separate Cabal store/build directory:
 
@@ -601,28 +586,22 @@ The explicit `direct` mode is intentional: the integration suite takes about a
 minute and should print each test case as it runs instead of looking stuck after
 `Test suite integration: RUNNING...`.
 
-The helper also builds `th-host-worker` before invoking `cabal test`, discovers
-its executable path with `cabal list-bin`, and exports it as:
+The helper builds the patched worker through Nix before invoking `cabal test`
+and exports it as:
 
 ```text
-TH_HOST_WORKER=/path/to/th-host-worker
+TH_HOST_WORKER=/nix/store/...-th-host-worker/bin/th-host-worker
 ```
 
 This is deliberately done outside the test executable. Calling `cabal build`
 from inside a `cabal test` process can wait on Cabal's own build/store locks and
 look like a hung test suite.
 
-Run the raw Template Haskell smoke test suite with the patched GHC 9.10.3
-worker:
-
-```bash
-th-cross-raw-test
-```
-
-The raw smoke fixture uses a constructor that is intentionally not exported by
-its defining module. Textual splice replay is expected to be fragile for this
-shape; `wire-format=raw-th` carries the resolved `TH.Name` in the binary
-payload and lets the cross-side compiler convert the raw `TH.Exp` directly.
+The integration suite includes exact-name payload tests whose fixtures use
+names that are intentionally not exported by their defining modules. Textual
+splice replay is expected to be fragile for these shapes; the raw protocol
+carries the resolved `TH.Name` in the binary payload and lets the cross-side
+compiler convert the raw `TH.Exp`, `TH.Pat`, `TH.Type`, or `[TH.Dec]` directly.
 
 The build helper is equivalent to:
 
@@ -632,8 +611,8 @@ cabal \
   build \
   --project-dir prototype \
   --builddir dist-newstyle-nix \
-  --with-compiler ghc-9.8.4 \
-  --with-hc-pkg ghc-9.8.4-pkg \
+  --with-compiler ghc-9.10.3 \
+  --with-hc-pkg ghc-9.10.3-pkg \
   all
 ```
 

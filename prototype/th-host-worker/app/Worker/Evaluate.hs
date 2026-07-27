@@ -48,20 +48,16 @@ import GHC.Driver.Session
   , parseDynamicFlagsFull
   , stubDir
   )
-import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr)
+import GHC.Hs (GhcPs, GhcTc, LHsDecl, LHsExpr, LHsType, LPat)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Serialized (Serialized)
 import GHC.Tc.Gen.Splice (defaultRunMeta)
-#if MIN_VERSION_ghc(9,10,0)
-import GHC.Tc.Gen.Splice (runMeta', runTHExp)
-#endif
+import GHC.Tc.Gen.Splice (runMeta', runTHDec, runTHExp, runTHPat, runTHType)
 import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
 import GHC.Tc.Types (TcGblEnv (..), TcM)
 import GHC.Tc.Utils.Monad (getErrsVar, getGblEnv, liftIO, readTcRef, writeTcRef)
-#if MIN_VERSION_ghc(9,10,0)
-import GHC.ThToHs (convertToHsExpr)
+import GHC.ThToHs (convertToHsDecls, convertToHsExpr, convertToHsType, convertToPat)
 import GHC.Types.Basic (Origin (FromSource))
-#endif
 import GHC.Types.Error
   ( Messages
   , MsgEnvelope (errMsgDiagnostic)
@@ -73,10 +69,6 @@ import GHC.Types.Meta
   ( MetaHook
   , MetaRequest (..)
   , metaRequestAW
-  , metaRequestD
-  , metaRequestE
-  , metaRequestP
-  , metaRequestT
   )
 import GHC.Types.SrcLoc
   ( SrcSpan (..)
@@ -90,15 +82,7 @@ import GHC.Types.SrcLoc
 import GHC.Unit.Module (moduleName, moduleNameString)
 import GHC.Unit.Types (stringToUnit)
 import GHC.Utils.Outputable
-  ( Outputable
-  , SDoc
-  , defaultSDocContext
-  , ppr
-  , renderWithContext
-  , sdocSuppressUniques
-#if MIN_VERSION_ghc(9,10,0)
-  , text
-#endif
+  ( text
   )
 import GHCi.TH.Binary ()
 import System.FilePath ((</>), takeDirectory)
@@ -111,7 +95,6 @@ import THCross.Protocol
   , SpliceKind (..)
   , SpliceRequest (..)
   , SpliceResponse (..)
-  , WireFormat (..)
   , sourceSpanKeyText
   , spliceKindToStr
   )
@@ -133,12 +116,10 @@ data CapturedSplice = CapturedSplice
 --
 -- 'SpliceKey' identifies the source occurrence. The component unit id and
 -- source file scope that occurrence to the Cabal/GHC component context that
--- produced the expansion. The wire format is part of the key because raw TH
--- requests carry payloads that textual requests do not.
+-- produced the expansion.
 data CacheKey = CacheKey
   { cacheKeyComponentUnitId :: !String
   , cacheKeySourceFile :: !FilePath
-  , cacheKeyWireFormat :: !WireFormat
   , cacheKeySpliceKey :: !SpliceKey
   }
   deriving (Eq, Ord, Show)
@@ -225,7 +206,7 @@ captureModuleSplices request = do
         setSessionDynFlags dflagsWithHostOptions
       _ ->
         fail ("unsupported host GHC option(s): " <> show (map unLoc remainingArgs))
-    installCaptureHook (requestWireFormat request) capturesRef dependentFilesRef foreignFilesRef
+    installCaptureHook capturesRef dependentFilesRef foreignFilesRef
     loadRequestedModule
   case result of
     Failed ->
@@ -271,7 +252,6 @@ cacheKeyFor request spliceKey =
   CacheKey
     { cacheKeyComponentUnitId = requestComponentUnitId request
     , cacheKeySourceFile = requestSourceFile request
-    , cacheKeyWireFormat = requestWireFormat request
     , cacheKeySpliceKey = spliceKey
     }
 
@@ -295,7 +275,7 @@ cacheModuleSplices request captures requestedSpliceResult cache =
 
 -- | Find a cached expansion for the request.
 --
--- Annotation-wrapper requests can have synthetic cross-side spans after textual
+-- Annotation-wrapper requests can have synthetic cross-side spans after
 -- declaration replay, so they retain the same single-wrapper fallback used for
 -- freshly captured module results.
 selectCachedSplice :: SpliceRequest -> CachedSplices -> Maybe SpliceResult
@@ -315,7 +295,6 @@ selectCachedAnnotationWrapperFallback request cache
         [ capturedSpliceResult captured
         | (cacheKey, captured) <- Map.toList cache
         , cacheKeyComponentUnitId cacheKey == requestComponentUnitId request
-        , cacheKeyWireFormat cacheKey == requestWireFormat request
         , capturedSpliceKind captured == AnnotationWrapperSplice
         ]
       of
@@ -377,16 +356,15 @@ exposeHostPackageId unitId =
 -- | Install a host-only hook that delegates to the previous hook/default GHC
 -- evaluator, records the generated splice, and returns it unchanged.
 installCaptureHook ::
-  WireFormat ->
   IORef CapturedSplices ->
   IORef [FilePath] ->
   IORef [SpliceForeignFile] ->
   Ghc ()
-installCaptureHook wireFormat capturesRef dependentFilesRef foreignFilesRef = do
+installCaptureHook capturesRef dependentFilesRef foreignFilesRef = do
   hscEnv <- getSession
   let hooks0 = hsc_hooks hscEnv
       previousRunMeta = runMetaHook hooks0
-      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook wireFormat capturesRef dependentFilesRef foreignFilesRef previousRunMeta)}
+      hooks1 = hooks0 {runMetaHook = Just (captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta)}
   setSession hscEnv {hsc_hooks = hooks1}
 
 -- | Host-side 'runMetaHook' wrapper that records expansions without changing
@@ -397,13 +375,12 @@ installCaptureHook wireFormat capturesRef dependentFilesRef foreignFilesRef = do
 -- session. The hook then pretty-prints the expansion, stores it in 'capturesRef',
 -- and returns the original expansion back to GHC so module loading continues.
 captureMetaHook ::
-  WireFormat ->
   IORef CapturedSplices ->
   IORef [FilePath] ->
   IORef [SpliceForeignFile] ->
   Maybe (MetaHook TcM) ->
   MetaHook TcM
-captureMetaHook wireFormat capturesRef dependentFilesRef foreignFilesRef previousRunMeta request spliceExpr =
+captureMetaHook capturesRef dependentFilesRef foreignFilesRef previousRunMeta request spliceExpr =
   case request of
     MetaE wrap -> do
       expanded <-
@@ -412,20 +389,14 @@ captureMetaHook wireFormat capturesRef dependentFilesRef foreignFilesRef previou
     MetaD wrap -> do
       expanded <-
         captureDeclarationSpliceResult
-          DeclarationSplice
-          (metaRequestD runMeta)
       pure (wrap expanded)
     MetaP wrap -> do
       expanded <-
-        captureSpliceResult
-          PatternSplice
-          (metaRequestP runMeta)
+        capturePatternSpliceResult
       pure (wrap expanded)
     MetaT wrap -> do
       expanded <-
-        captureSpliceResult
-          TypeSplice
-          (metaRequestT runMeta)
+        captureTypeSpliceResult
       pure (wrap expanded)
     MetaAW wrap -> do
       serialized <-
@@ -436,44 +407,13 @@ captureMetaHook wireFormat capturesRef dependentFilesRef foreignFilesRef previou
     runMeta = fromMaybe defaultRunMeta previousRunMeta
 
     captureExpressionSpliceResult =
-      case wireFormat of
-        TextualWireFormat ->
-          captureSpliceResult
-            ExpressionSplice
-            (metaRequestE runMeta)
-        RawTHWireFormat ->
-          captureRawExpressionSpliceResult
-
-    captureSpliceResult spliceKind evaluateSplice =
-      captureRenderedSpliceResult spliceKind evaluateSplice prettyExpanded
-
-    captureDeclarationSpliceResult spliceKind evaluateSplice =
-      captureRenderedSpliceResult spliceKind evaluateSplice prettyExpandedDeclarations
-
-    captureRenderedSpliceResult spliceKind evaluateSplice renderExpanded = do
-      (expanded, diagnostics, addedTopDecls) <-
-        evaluateWithIsolatedSpliceState (evaluateSplice spliceExpr)
-      renderedExpansion <- renderExpanded expanded
-      renderedAddedTopDecls <- prettyExpandedDeclarations addedTopDecls
-      spliceKey <- mkCapturedSpliceKey spliceKind spliceExpr
-      dependentFiles <- getDependentFiles
-      foreignFiles <- getForeignFiles
-      liftIO $ do
-        writeIORef dependentFilesRef dependentFiles
-        writeIORef foreignFilesRef foreignFiles
-        modifyIORef' capturesRef (Map.insert spliceKey (CapturedSplice spliceKind (mkSpliceResult renderedExpansion Nothing Nothing renderedAddedTopDecls diagnostics)))
-      pure expanded
-
-    captureRawExpressionSpliceResult =
-#if MIN_VERSION_ghc(9,10,0)
       do
-        liftIO (hPutStrLn stderr "th-host-worker: raw-th expression start")
+        liftIO (hPutStrLn stderr "th-host-worker: expression splice start")
         (thExp, diagnostics, addedTopDecls) <-
-          evaluateWithIsolatedSpliceState (runMetaExpRaw spliceExpr)
-        liftIO (hPutStrLn stderr "th-host-worker: raw-th expression evaluated")
-        hsExp <- convertRawExpressionOrFail spliceExpr thExp
-        liftIO (hPutStrLn stderr "th-host-worker: raw-th expression converted")
-        renderedAddedTopDecls <- prettyExpandedDeclarations addedTopDecls
+          evaluateSplice (runMetaExpTH spliceExpr)
+        liftIO (hPutStrLn stderr "th-host-worker: expression splice evaluated")
+        hsExp <- convertExpressionOrFail spliceExpr thExp
+        liftIO (hPutStrLn stderr "th-host-worker: expression splice converted")
         spliceKey <- mkCapturedSpliceKey ExpressionSplice spliceExpr
         dependentFiles <- getDependentFiles
         foreignFiles <- getForeignFiles
@@ -486,17 +426,80 @@ captureMetaHook wireFormat capturesRef dependentFilesRef foreignFilesRef previou
                 spliceKey
                 ( CapturedSplice
                     ExpressionSplice
-                    (mkSpliceResult (TH.pprint thExp) (Just thExp) Nothing renderedAddedTopDecls diagnostics)
+                    (mkSpliceResult (Just thExp) Nothing Nothing Nothing Nothing addedTopDecls diagnostics)
                 )
             )
         pure hsExp
-#else
-      fail "raw-th wire format requires th-host-worker built with patched GHC 9.10 or newer"
-#endif
 
-    captureAnnotationWrapper evaluateSplice = do
+    capturePatternSpliceResult =
+      do
+        (thPat, diagnostics, addedTopDecls) <-
+          evaluateSplice (runMetaPatTH spliceExpr)
+        hsPat <- convertPatternOrFail spliceExpr thPat
+        spliceKey <- mkCapturedSpliceKey PatternSplice spliceExpr
+        dependentFiles <- getDependentFiles
+        foreignFiles <- getForeignFiles
+        liftIO $ do
+          writeIORef dependentFilesRef dependentFiles
+          writeIORef foreignFilesRef foreignFiles
+          modifyIORef'
+            capturesRef
+            ( Map.insert
+                spliceKey
+                ( CapturedSplice
+                    PatternSplice
+                    (mkSpliceResult Nothing (Just thPat) Nothing Nothing Nothing addedTopDecls diagnostics)
+                )
+            )
+        pure hsPat
+
+    captureTypeSpliceResult =
+      do
+        (thType, diagnostics, addedTopDecls) <-
+          evaluateSplice (runMetaTypeTH spliceExpr)
+        hsType <- convertTypeOrFail spliceExpr thType
+        spliceKey <- mkCapturedSpliceKey TypeSplice spliceExpr
+        dependentFiles <- getDependentFiles
+        foreignFiles <- getForeignFiles
+        liftIO $ do
+          writeIORef dependentFilesRef dependentFiles
+          writeIORef foreignFilesRef foreignFiles
+          modifyIORef'
+            capturesRef
+            ( Map.insert
+                spliceKey
+                ( CapturedSplice
+                    TypeSplice
+                    (mkSpliceResult Nothing Nothing (Just thType) Nothing Nothing addedTopDecls diagnostics)
+                )
+            )
+        pure hsType
+
+    captureDeclarationSpliceResult =
+      do
+        (thDecls, diagnostics, addedTopDecls) <-
+          evaluateSplice (runMetaDeclsTH spliceExpr)
+        hsDecls <- convertDeclarationsOrFail spliceExpr thDecls
+        spliceKey <- mkCapturedSpliceKey DeclarationSplice spliceExpr
+        dependentFiles <- getDependentFiles
+        foreignFiles <- getForeignFiles
+        liftIO $ do
+          writeIORef dependentFilesRef dependentFiles
+          writeIORef foreignFilesRef foreignFiles
+          modifyIORef'
+            capturesRef
+            ( Map.insert
+                spliceKey
+                ( CapturedSplice
+                    DeclarationSplice
+                    (mkSpliceResult Nothing Nothing Nothing (Just thDecls) Nothing addedTopDecls diagnostics)
+                )
+            )
+        pure hsDecls
+
+    captureAnnotationWrapper runAnnotationWrapper = do
       (serialized, diagnostics, _addedTopDecls) <-
-        evaluateWithIsolatedSpliceState (evaluateSplice spliceExpr)
+        evaluateSplice (runAnnotationWrapper spliceExpr)
       spliceKey <- mkCapturedSpliceKey AnnotationWrapperSplice spliceExpr
       liftIO $ do
         modifyIORef'
@@ -505,21 +508,31 @@ captureMetaHook wireFormat capturesRef dependentFilesRef foreignFilesRef previou
               spliceKey
               ( CapturedSplice
                   AnnotationWrapperSplice
-                  (mkSpliceResult "" Nothing (Just (encodeAnnotationWrapper serialized)) "" diagnostics)
+                  (mkSpliceResult Nothing Nothing Nothing Nothing (Just (encodeAnnotationWrapper serialized)) [] diagnostics)
               )
           )
       pure serialized
 
 -- | Construct a captured splice result before module-level effects are attached.
-mkSpliceResult :: String -> Maybe TH.Exp -> Maybe [Word8] -> String -> [SpliceDiagnostic] -> SpliceResult
-mkSpliceResult renderedExpansion rawExpression annotationWrapper renderedAddedTopDecls diagnostics =
+mkSpliceResult ::
+  Maybe TH.Exp ->
+  Maybe TH.Pat ->
+  Maybe TH.Type ->
+  Maybe [TH.Dec] ->
+  Maybe [Word8] ->
+  [TH.Dec] ->
+  [SpliceDiagnostic] ->
   SpliceResult
-    { spliceResultHaskell = renderedExpansion
-    , spliceResultRawExpression = rawExpression
+mkSpliceResult expression pattern type_ declarations annotationWrapper addedTopDecls diagnostics =
+  SpliceResult
+    { spliceResultExpression = expression
+    , spliceResultPattern = pattern
+    , spliceResultType = type_
+    , spliceResultDeclarations = declarations
     , spliceResultAnnotationWrapper = annotationWrapper
     , spliceResultDependentFiles = []
     , spliceResultForeignFiles = []
-    , spliceResultAddedTopDecls = renderedAddedTopDecls
+    , spliceResultAddedTopDecls = addedTopDecls
     , spliceResultDiagnostics = diagnostics
     }
 
@@ -528,30 +541,73 @@ encodeAnnotationWrapper :: Serialized -> [Word8]
 encodeAnnotationWrapper =
   LBS.unpack . encode
 
-#if MIN_VERSION_ghc(9,10,0)
 -- | Evaluate an expression splice to raw Template Haskell syntax without
 -- converting it to GHC parsed syntax inside 'runMeta''.
-runMetaExpRaw :: LHsExpr GhcTc -> TcM TH.Exp
-runMetaExpRaw =
+runMetaExpTH :: LHsExpr GhcTc -> TcM TH.Exp
+runMetaExpTH =
   runMeta'
     True
     (text . TH.pprint)
     (\_srcSpan hval -> Right <$> runTHExp hval)
 
--- | Convert raw Template Haskell syntax back to parsed GHC syntax so the host
--- GHC load keeps normal splice semantics while the raw payload is captured.
-convertRawExpressionOrFail :: LHsExpr GhcTc -> TH.Exp -> TcM (LHsExpr GhcPs)
-convertRawExpressionOrFail spliceExpr thExp =
+runMetaPatTH :: LHsExpr GhcTc -> TcM TH.Pat
+runMetaPatTH =
+  runMeta'
+    True
+    (text . TH.pprint)
+    (\_srcSpan hval -> Right <$> runTHPat hval)
+
+runMetaTypeTH :: LHsExpr GhcTc -> TcM TH.Type
+runMetaTypeTH =
+  runMeta'
+    True
+    (text . TH.pprint)
+    (\_srcSpan hval -> Right <$> runTHType hval)
+
+runMetaDeclsTH :: LHsExpr GhcTc -> TcM [TH.Dec]
+runMetaDeclsTH =
+  runMeta'
+    True
+    (text . TH.pprint)
+    (\_srcSpan hval -> Right <$> runTHDec hval)
+
+-- | Convert Template Haskell syntax back to parsed GHC syntax so the host GHC
+-- load keeps normal splice semantics while the TH payload is captured.
+convertExpressionOrFail :: LHsExpr GhcTc -> TH.Exp -> TcM (LHsExpr GhcPs)
+convertExpressionOrFail spliceExpr thExp =
   case convertToHsExpr generatedOrigin (getLocA spliceExpr) thExp of
     Left _err ->
-      fail "raw TH expression conversion failed"
+      fail "TH expression conversion failed"
     Right hsExp ->
       pure hsExp
+
+convertPatternOrFail :: LHsExpr GhcTc -> TH.Pat -> TcM (LPat GhcPs)
+convertPatternOrFail spliceExpr thPat =
+  case convertToPat generatedOrigin (getLocA spliceExpr) thPat of
+    Left _err ->
+      fail "TH pattern conversion failed"
+    Right hsPat ->
+      pure hsPat
+
+convertTypeOrFail :: LHsExpr GhcTc -> TH.Type -> TcM (LHsType GhcPs)
+convertTypeOrFail spliceExpr thType =
+  case convertToHsType generatedOrigin (getLocA spliceExpr) thType of
+    Left _err ->
+      fail "TH type conversion failed"
+    Right hsType ->
+      pure hsType
+
+convertDeclarationsOrFail :: LHsExpr GhcTc -> [TH.Dec] -> TcM [LHsDecl GhcPs]
+convertDeclarationsOrFail spliceExpr thDecls =
+  case convertToHsDecls generatedOrigin (getLocA spliceExpr) thDecls of
+    Left _err ->
+      fail "TH declaration conversion failed"
+    Right hsDecls ->
+      pure hsDecls
 
 generatedOrigin :: Origin
 generatedOrigin =
   FromSource
-#endif
 
 -- | Evaluate one splice while separately recording replayable TH state.
 --
@@ -560,24 +616,29 @@ generatedOrigin =
 -- this splice alone; restoring the union afterwards keeps normal host
 -- compilation semantics intact.
 --
--- @addTopDecls@ similarly writes to a cumulative 'TcGblEnv' ref. Isolating it
--- lets the worker capture declarations added by this splice without duplicating
--- declarations added by earlier splices.
-evaluateWithIsolatedSpliceState :: TcM a -> TcM (a, [SpliceDiagnostic], [LHsDecl GhcPs])
-evaluateWithIsolatedSpliceState action = do
+-- @addTopDecls@ similarly writes to cumulative 'TcGblEnv' refs. Isolating them
+-- lets the worker capture raw declarations added by this splice without
+-- duplicating declarations added by earlier splices.
+evaluateSplice :: TcM a -> TcM (a, [SpliceDiagnostic], [TH.Dec])
+evaluateSplice action = do
   errsVar <- getErrsVar
   previousMessages <- readTcRef errsVar
   tcGblEnv <- getGblEnv
   let topDeclsVar = tcg_th_topdecls tcGblEnv
+      topDeclsTHVar = tcg_th_topdecls_th tcGblEnv
   previousTopDecls <- readTcRef topDeclsVar
+  previousTopDeclsTH <- readTcRef topDeclsTHVar
   writeTcRef errsVar emptyMessages
   writeTcRef topDeclsVar []
+  writeTcRef topDeclsTHVar []
   result <- action
   spliceMessages <- readTcRef errsVar
   addedTopDecls <- readTcRef topDeclsVar
+  addedTopDeclsTH <- readTcRef topDeclsTHVar
   writeTcRef errsVar (spliceMessages `unionMessages` previousMessages)
   writeTcRef topDeclsVar (addedTopDecls <> previousTopDecls)
-  pure (result, extractTHDiagnostics spliceMessages, addedTopDecls)
+  writeTcRef topDeclsTHVar (addedTopDeclsTH <> previousTopDeclsTH)
+  pure (result, extractTHDiagnostics spliceMessages, addedTopDeclsTH)
 
 -- | Keep only diagnostics explicitly emitted by Template Haskell @report*@.
 extractTHDiagnostics :: Messages TcRnMessage -> [SpliceDiagnostic]
@@ -625,25 +686,6 @@ mkCapturedSpliceKey spliceKind spliceExpr = do
       spliceKindName = spliceKindToStr spliceKind
   pure (mkSpliceKey spliceModuleName spliceKindName (sourceSpanKeyText sourceSpan))
 
--- | Convert a generated AST node back to textual Haskell for the wire format.
-prettyExpanded :: Outputable a => a -> TcM String
-prettyExpanded =
-  pure . renderHaskell . ppr
-
--- | Convert generated declaration ASTs back to textual Haskell for the wire
--- format.
-prettyExpandedDeclarations :: [LHsDecl GhcPs] -> TcM String
-prettyExpandedDeclarations =
-  fmap unlines . mapM prettyExpanded
-
--- | Render Haskell without GHC-generated uniques.
---
--- Suppressing uniques keeps declarations such as generated data constructors
--- readable and reparsable by the cross-side compiler.
-renderHaskell :: SDoc -> String
-renderHaskell =
-  renderWithContext defaultSDocContext {sdocSuppressUniques = True}
-
 -- | Convert a GHC source span into the protocol span used for matching.
 protocolSourceSpan :: SrcSpan -> SourceSpan
 protocolSourceSpan = \case
@@ -684,9 +726,9 @@ selectCapturedSpliceOrError request captures =
           <> " splice(s): "
           <> show (Map.keys captures)
 
--- | Annotation declarations replayed from text get synthetic source spans on
--- the cross side. For the MVP, fall back to the only captured annotation wrapper
--- in the module.
+-- | Replayed annotation declarations can trigger wrapper requests with source
+-- spans that differ from the host capture. Fall back to the only captured
+-- annotation wrapper in the module.
 selectAnnotationWrapperFallback :: SpliceRequest -> CapturedSplices -> Maybe SpliceResult
 selectAnnotationWrapperFallback request captures
   | requestSpliceKind request /= AnnotationWrapperSplice = Nothing

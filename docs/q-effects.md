@@ -50,7 +50,7 @@ For correctness, every effect that changes GHC compilation state must either be:
 | --- | --- | --- | --- |
 | `addDependentFile` | `qAddDependentFile` prepends the path to `tcg_dependent_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `dependentFiles :: [FilePath]`; the cross-side plugin appends them to `tcg_dependent_files`. |
 | `addTempFile` | `qAddTempFile` allocates a GHC-session temp file through `newTempName`. | Host-only effect, covered by smoke test. | Do not replay temp file allocation directly. If the file is later passed to `addForeignFilePath` or `addDependentFile`, propagate that higher-level effect. |
-| `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Partially forwarded through Strategy A. | The worker response includes textual `addedTopDecls`; the cross-side plugin parses and appends them to `tcg_th_topdecls`. `AnnD` is covered by same-GHC-version annotation-wrapper forwarding. Value-binding visibility and `tcg_th_topnames` semantics need more investigation. |
+| `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Forwarded through the raw TH protocol. | The patched host GHC records raw `[TH.Dec]` values passed to `qAddTopDecls`. The worker response includes those declarations; the cross-side plugin converts them locally and appends them to `tcg_th_topdecls`, or grafts them into a declaration-splice result. `AnnD` is covered by same-GHC-version annotation-wrapper forwarding. |
 | `addForeignFile` / `addForeignSource` | `addForeignFile` is a deprecated alias for `addForeignSource`; `addForeignSource` writes source text to a temp file and calls `addForeignFilePath`. | Forwarded through existing `addForeignFilePath` propagation. | Covered by an integration test. The generated temp file path is host-side but is passed to cross GHC as a foreign file path. |
 | `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `foreignFiles`; the cross-side plugin appends them to `tcg_th_foreign_files`, so the target-side build owns compilation/linking. |
 | `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Unsupported in MVP; must be forwarded before production use. | Future protocol can carry `corePlugins :: [String]`; cross-side replay must check that the plugin is available to the cross compiler environment. |
@@ -103,49 +103,20 @@ getQ/putQ host module state
 `addDependentFile` and `addForeignFilePath` directly affect build correctness and
 have simple replay shapes.
 
-## Suggested Response Extensions
+## Response Fields
 
-For `addDependentFile`:
+Current binary response fields carry:
 
-```json
-{
-  "requestId": "123",
-  "status": "ok",
-  "generatedHaskell": "42",
-  "annotationWrapper": null,
-  "dependentFiles": [
-    "/absolute/path/schema.json"
-  ],
-  "foreignFiles": [
-    {
-      "language": "c",
-      "path": "/absolute/path/generated.c"
-    }
-  ],
-  "addedTopDecls": "foreign import ccall \"probe\" probe :: IO Int\n"
-}
-```
-
-Later response fields:
-
-```json
-{
-  "warnings": [
-    {
-      "message": "...",
-      "sourceSpan": null
-    }
-  ],
-  "corePlugins": [
-    "My.Plugin"
-  ],
-  "addedTopDecls": "..."
-}
-```
+- raw TH payload for the primary splice result;
+- `dependentFiles :: [FilePath]`;
+- `foreignFiles :: [SpliceForeignFile]`;
+- `addedTopDecls :: [TH.Dec]`;
+- `diagnostics :: [SpliceDiagnostic]`;
+- optional same-GHC-version annotation-wrapper bytes.
 
 ## `addTopDecls` Investigation
 
-GHC 9.8.4 public API:
+Template Haskell public API:
 
 ```haskell
 addTopDecls :: [Dec] -> Q ()
@@ -225,12 +196,13 @@ Why this is harder than `addDependentFile` or `addForeignFilePath`:
 - The host worker can observe the converted `GhcPs` declarations, but the cross
   compiler needs equivalent local `GhcPs` declarations inserted at the right
   declaration-group point.
-- Textual transport is still possible, but replay must preserve declaration
-  ordering and staging. Simply appending declarations to a side list may be too
-  late if later declarations in the same group depend on them.
-- `tcg_th_topnames` matters for exact-name tracking. Replaying only text through
-  `tcg_th_topdecls` does not reproduce host exact names. The successful
-  exact-name declaration-splice test therefore uses Strategy B grafting.
+- Raw replay must still preserve declaration ordering and staging. Simply
+  appending declarations to a side list may be too late if later declarations in
+  the same group depend on them.
+- `tcg_th_topnames` matters for exact-name tracking. The cross-side plugin
+  mirrors exact binders for replayed `addTopDecls`; declaration splices still
+  use Strategy B grafting so the added declarations and primary result are
+  returned as one `MetaD` expansion.
 
 The prototype now uses a hybrid implementation: Strategy A for non-declaration
 splices, and Strategy B for declaration splices.
@@ -267,16 +239,14 @@ Required implementation details:
   splice, and then restoring `addedTopDecls <> previousTopDecls`.
 - Preserve GHC's prepend order. GHC uses `ds ++ topds`, so the captured wire
   order must match the order GHC would later consume.
-- For non-declaration splices, parse declaration fragments on the cross side and
-  update `tcg_th_topdecls :: TcRef [LHsDecl GhcPs]`. The prototype does this
-  through the same declaration-fragment parser used for declaration splice
-  results.
+- For non-declaration splices, convert raw `TH.Dec` values on the cross side and
+  update `tcg_th_topdecls :: TcRef [LHsDecl GhcPs]`.
 - For declaration splices, graft the added declarations into the `MetaD` result
   instead. This avoids losing the useful same-group relationship between the
   declaration-splice result and declarations added by `addTopDecls`.
-- Decide what to do with `tcg_th_topnames :: TcRef NameSet`. The current text
-  replay path does not transport exact `Name`s. This is acceptable for the
-  tested subset, but it is not full `addTopDecls` semantics.
+- Mirror `tcg_th_topnames :: TcRef NameSet` for replayed `addTopDecls` binders.
+  The cross-side plugin repeats GHC's top-declaration check and records exact
+  binders in this ref.
 
 Prototype validation:
 
@@ -311,8 +281,8 @@ Annotation-wrapper caveat:
 - Replayed `AnnD` declarations trigger a later `MetaAW` request. The prototype
   handles that request by returning a binary-encoded GHC `Serialized` payload
   captured by the host worker.
-- This is intentionally same-GHC-version support. It is not a stable textual
-  cross-version wire format like `generatedHaskell` or `addedTopDecls`.
+- This is intentionally same-GHC-version support, like the raw TH payloads used
+  for normal splice results and `addedTopDecls`.
 
 Important confirmed limitation:
 
@@ -366,16 +336,16 @@ Relevant upstream GHC 9.8.4 tests found in `testsuite/tests/th`:
   splices. In the GHC 9.8.4 testsuite this test is marked `expect_broken(13587)`,
   so it is not a stable acceptance test for this prototype yet.
 
-### Strategy B: graft into declaration splice expansion
+### Strategy B: graft raw declarations into declaration splice expansion
 
 Conceptual flow:
 
 ```text
 host declaration splice executes
-  -> host captures primary declaration-splice result
-  -> host also captures addTopDecls declarations produced during that splice
-  -> worker returns the primary declaration fragment and addedTopDecls fragment
-  -> cross plugin parses both fragments
+  -> host captures primary declaration-splice TH result
+  -> host also captures raw TH.Dec values passed to addTopDecls
+  -> worker returns both raw payloads
+  -> cross plugin converts both payloads with convertToHsDecls
   -> runMetaHook returns combined [LHsDecl GhcPs] from MetaD
 ```
 
@@ -389,22 +359,20 @@ Why it is attractive:
 
 Required implementation details:
 
-- Restrict the first prototype to `MetaD`. Expression/type/pattern splices that
-  call `addTopDecls` would remain unsupported under this strategy.
-- Capture the delta of `tcg_th_topdecls` produced while evaluating the
-  declaration splice.
+- Capture the raw delta of `addTopDecls` produced while evaluating the
+  declaration splice. The current patched GHC exposes this through an additional
+  `TcGblEnv` ref populated from `qAddTopDecls`.
 - Decide ordering between the primary declaration-splice result and declarations
   added through `addTopDecls`. The safest first approximation is to preserve
   GHC's observed order by comparing with native `-ddump-splices` output for
   examples.
-- Pretty-print and reparse the combined declaration fragment on the cross side.
+- Convert both raw TH payloads on the cross side. Do not pretty-print and
+  reparse; that loses exact names.
 
 Main limitation:
 
-This does not implement the full `addTopDecls` API. It only handles the subset
-where `addTopDecls` is called during a declaration splice and the added
-declarations can be safely represented as part of that splice's returned
-declaration list.
+For non-declaration splices, raw `addTopDecls` payloads are replayed by
+appending converted declarations to cross-side `tcg_th_topdecls`.
 
 Implemented validation shape:
 
@@ -422,9 +390,8 @@ $( do
 ```
 
 This is native-GHC-valid because the returned declaration references the exact
-name introduced by `addTopDecls`. Plain textual replay through
-`tcg_th_topdecls` loses that exact-name relationship; grafting both fragments
-into one `MetaD` result preserves enough source-level structure for this case.
+name introduced by `addTopDecls`. Raw replay preserves that relationship because
+both the added declarations and the splice result carry the same `NameU`.
 
 ### Strategy Status
 
@@ -434,7 +401,7 @@ into one `MetaD` result preserves enough source-level structure for this case.
 | Scope | Potentially full `addTopDecls` semantics | Declaration splices only |
 | Cross-side mechanism | Mutate GHC TH state refs | Return larger `MetaD` result |
 | Ordering risk | Reduced for native-GHC-valid expression-splice cases now covered by tests | Lower for declaration splices, but narrower semantics |
-| `tcg_th_topnames` risk | Confirmed limitation for text replay; exact names are not transported | May be avoided if normal declaration splice path handles names |
+| `tcg_th_topnames` risk | Cross-side replay mirrors exact binders into `tcg_th_topnames` | Normal declaration splice path handles names directly |
 | Expression-splice support | Possible | Not supported initially |
 | Prototype status | Implemented for a tested subset | Implemented for a tested subset |
 | Semantic completeness | Better target | Partial but more controlled |
@@ -451,9 +418,8 @@ Use a hybrid implementation:
   by `addTopDecls`.
 
 The current implementation is still subset support, not full semantic support.
-Before declaring full support, add native-GHC-valid tests for type/pattern
-splice contexts and decide whether any remaining cases require explicit
-`tcg_th_topnames` protocol support.
+Before declaring full support, add native-GHC-valid tests for type and pattern
+splice contexts.
 
 ## Important Limitations
 

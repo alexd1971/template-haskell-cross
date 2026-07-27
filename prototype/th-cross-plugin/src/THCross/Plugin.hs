@@ -4,8 +4,8 @@
 --
 -- The plugin installs a custom 'runMetaHook' through the driver plugin hook.
 -- With @-fplugin-opt=THCross.Plugin:worker=PATH@ it asks an external binary
--- worker for generated Haskell text, parses that text locally, and returns the
--- resulting @GhcPs@ AST.
+-- worker for raw Template Haskell AST values, converts them locally, and
+-- returns the resulting @GhcPs@ AST.
 module THCross.Plugin (plugin) where
 
 import Control.Concurrent.MVar
@@ -19,6 +19,7 @@ import Data.Binary (decodeOrFail)
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (stripPrefix)
 import Data.Maybe (listToMaybe, mapMaybe)
+import GHC.Data.FastString (unpackFS)
 import GHC.Driver.Env.Types (HscEnv (..))
 import GHC.Driver.Hooks (Hooks (..))
 import GHC.Driver.Plugins
@@ -27,12 +28,17 @@ import GHC.Driver.Plugins
   , defaultPlugin
   , purePlugin
   )
-import GHC.Data.FastString (unpackFS)
-import GHC.Hs (GhcPs, LHsExpr)
+import GHC.Hs
+import GHC.Hs.Utils (CollectFlag (CollNoDictBinders), collectHsBindBinders)
 import GHC.Parser.Annotation (getLocA)
 import GHC.Serialized (Serialized)
 import GHC.Settings.Config (cProjectVersion)
-import GHC.Tc.Errors.Types (THError (ReportCustomQuasiError), TcRnMessage (TcRnTHError))
+import GHC.Tc.Errors.Types
+  ( AddTopDeclsError (InvalidTopDecl)
+  , THError (AddTopDeclsError, ReportCustomQuasiError, THNameError)
+  , THNameError (NonExactName)
+  , TcRnMessage (TcRnTHError)
+  )
 import GHC.Tc.Types (TcGblEnv (..), TcM)
 import GHC.Tc.Utils.Monad
   ( addDiagnostic
@@ -41,20 +47,25 @@ import GHC.Tc.Utils.Monad
   , liftIO
   , updTcRef
   )
-import GHC.ThToHs (convertToHsExpr)
+import GHC.ThToHs (convertToHsDecls, convertToHsExpr, convertToHsType, convertToPat)
 import GHC.Types.Basic (Origin (FromSource))
 import GHC.Types.Meta (MetaHook, MetaRequest (..))
 import GHC.Types.SrcLoc
-  ( SrcSpan (..)
+  ( GenLocated (L)
+  , SrcSpan (..)
   , srcSpanEndCol
   , srcSpanEndLine
   , srcSpanFile
   , srcSpanStartCol
   , srcSpanStartLine
+  , unLoc
   )
+import GHC.Types.Name.Reader (RdrName (Exact))
+import GHC.Types.Name.Set (extendNameSet)
 import GHC.Unit.Module (moduleName, moduleNameString, moduleUnitId, unitIdString)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import GHCi.TH.Binary ()
+import qualified Language.Haskell.TH as TH
 import System.IO
   ( Handle
   , hSetBuffering
@@ -66,12 +77,6 @@ import System.Process
   , StdStream (..)
   , createProcess
   , proc
-  )
-import THCross.ParseFragment
-  ( parseDeclarationFragments
-  , parseExpressionFragment
-  , parsePatternFragment
-  , parseTypeFragment
   )
 import THCross.Protocol
   ( SpliceDiagnostic (..)
@@ -85,7 +90,6 @@ import THCross.Protocol
   , readResponse
   , sourceSpanKeyText
   , spliceKindToStr
-  , WireFormat (..)
   , writeRequest
   )
 import THCross.SpliceKey
@@ -143,11 +147,11 @@ workerMetaHook workerState config request spliceExpr = do
       pure (wrap generated)
     MetaP wrap -> do
       generated <-
-        evaluateWorkerSplice tcGblEnv parsePatternFragment
+        evaluateWorkerPatternSplice tcGblEnv
       pure (wrap generated)
     MetaT wrap -> do
       generated <-
-        evaluateWorkerSplice tcGblEnv parseTypeFragment
+        evaluateWorkerTypeSplice tcGblEnv
       pure (wrap generated)
     MetaAW wrap -> do
       annotationWrapper <-
@@ -174,67 +178,54 @@ workerMetaHook workerState config request spliceExpr = do
     spliceKey tcGblEnv =
       mkSpliceKey (spliceModuleName tcGblEnv) spliceKindName (sourceSpanKeyText protocolSpan)
 
-    evaluateWorkerSplice tcGblEnv parseFragment =
-      do
-        spliceResult <-
-          requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
-        logSpliceResult spliceResult
-        replayDependentFiles config (spliceResultDependentFiles spliceResult)
-        replayForeignFiles config (spliceResultForeignFiles spliceResult)
-        replayAddedTopDecls config (spliceResultAddedTopDecls spliceResult)
-        replayDiagnostics (spliceResultDiagnostics spliceResult)
-        parseFragment (spliceResultHaskell spliceResult)
-
     evaluateWorkerExpressionSplice tcGblEnv =
       do
         spliceResult <-
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
-        logSpliceResult spliceResult
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
-        replayAddedTopDecls config (spliceResultAddedTopDecls spliceResult)
+        replayAddedTopDecls config sourceLoc (spliceResultAddedTopDecls spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
-        case pluginWireFormat config of
-          TextualWireFormat ->
-            parseExpressionFragment (spliceResultHaskell spliceResult)
-          RawTHWireFormat ->
-            convertRawExpressionSplice sourceLoc spliceResult
+        convertExpressionSplice sourceLoc spliceResult
+
+    evaluateWorkerPatternSplice tcGblEnv =
+      do
+        spliceResult <-
+          requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+        replayDependentFiles config (spliceResultDependentFiles spliceResult)
+        replayForeignFiles config (spliceResultForeignFiles spliceResult)
+        replayAddedTopDecls config sourceLoc (spliceResultAddedTopDecls spliceResult)
+        replayDiagnostics (spliceResultDiagnostics spliceResult)
+        convertPatternSplice sourceLoc spliceResult
+
+    evaluateWorkerTypeSplice tcGblEnv =
+      do
+        spliceResult <-
+          requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
+        replayDependentFiles config (spliceResultDependentFiles spliceResult)
+        replayForeignFiles config (spliceResultForeignFiles spliceResult)
+        replayAddedTopDecls config sourceLoc (spliceResultAddedTopDecls spliceResult)
+        replayDiagnostics (spliceResultDiagnostics spliceResult)
+        convertTypeSplice sourceLoc spliceResult
 
     evaluateWorkerDeclarationSplice tcGblEnv =
       do
         spliceResult <-
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
-        logSpliceResult spliceResult
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
-        parseDeclarationSpliceResult spliceResult
-
-    parseDeclarationSpliceResult spliceResult = do
-      addedDecls <- parseAddedTopDeclsForDeclarationSplice (spliceResultAddedTopDecls spliceResult)
-      generatedDecls <- parseDeclarationFragments (spliceResultHaskell spliceResult)
-      pure (addedDecls <> generatedDecls)
-
-    parseAddedTopDeclsForDeclarationSplice addedTopDecls
-      | null addedTopDecls = pure []
-      | otherwise = do
-          parsedDecls <- parseDeclarationFragments addedTopDecls
-          debugLog ("th-cross: added top decls " <> show (length parsedDecls))
-          pure parsedDecls
+        convertDeclarationSplice sourceLoc spliceResult
 
     evaluateWorkerAnnotationWrapper tcGblEnv =
       do
         spliceResult <-
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
-        logSpliceResult spliceResult
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
-        replayAddedTopDecls config (spliceResultAddedTopDecls spliceResult)
+        replayAddedTopDecls config sourceLoc (spliceResultAddedTopDecls spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
         decodeAnnotationWrapper spliceResult
-
-    logSpliceResult spliceResult =
-      debugLog ("generated-haskell: " <> spliceResultHaskell spliceResult)
 
 -- | Decode a same-version binary 'Serialized' annotation wrapper returned by
 -- the host worker.
@@ -250,17 +241,66 @@ decodeAnnotationWrapper spliceResult =
         Right (_, _, serialized) ->
           pure serialized
 
-convertRawExpressionSplice :: SrcSpan -> SpliceResult -> TcM (LHsExpr GhcPs)
-convertRawExpressionSplice sourceLoc spliceResult =
-  case spliceResultRawExpression spliceResult of
+convertExpressionSplice :: SrcSpan -> SpliceResult -> TcM (LHsExpr GhcPs)
+convertExpressionSplice sourceLoc spliceResult =
+  case spliceResultExpression spliceResult of
     Nothing ->
-      fail "TH host worker did not return a raw expression payload"
+      fail "TH host worker did not return an expression payload"
     Just thExp ->
       case convertToHsExpr generatedOrigin sourceLoc thExp of
         Left _err ->
-          fail "TH host worker returned a raw expression payload that GHC could not convert"
+          fail "TH host worker returned an expression payload that GHC could not convert"
         Right hsExp ->
           pure hsExp
+
+convertPatternSplice :: SrcSpan -> SpliceResult -> TcM (LPat GhcPs)
+convertPatternSplice sourceLoc spliceResult =
+  case spliceResultPattern spliceResult of
+    Nothing ->
+      fail "TH host worker did not return a pattern payload"
+    Just thPat ->
+      case convertToPat generatedOrigin sourceLoc thPat of
+        Left _err ->
+          fail "TH host worker returned a pattern payload that GHC could not convert"
+        Right hsPat ->
+          pure hsPat
+
+convertTypeSplice :: SrcSpan -> SpliceResult -> TcM (LHsType GhcPs)
+convertTypeSplice sourceLoc spliceResult =
+  case spliceResultType spliceResult of
+    Nothing ->
+      fail "TH host worker did not return a type payload"
+    Just thType ->
+      case convertToHsType generatedOrigin sourceLoc thType of
+        Left _err ->
+          fail "TH host worker returned a type payload that GHC could not convert"
+        Right hsType ->
+          pure hsType
+
+convertDeclarationSplice :: SrcSpan -> SpliceResult -> TcM [LHsDecl GhcPs]
+convertDeclarationSplice sourceLoc spliceResult = do
+  addedDecls <- convertAddedTopDecls sourceLoc (spliceResultAddedTopDecls spliceResult)
+  generatedDecls <-
+    case spliceResultDeclarations spliceResult of
+      Nothing ->
+        fail "TH host worker did not return a declaration payload"
+      Just thDecls ->
+        case convertToHsDecls generatedOrigin sourceLoc thDecls of
+          Left _err ->
+            fail "TH host worker returned a declaration payload that GHC could not convert"
+          Right hsDecls ->
+            pure hsDecls
+  pure (addedDecls <> generatedDecls)
+
+convertAddedTopDecls :: SrcSpan -> [TH.Dec] -> TcM [LHsDecl GhcPs]
+convertAddedTopDecls sourceLoc addedTopDecls
+  | null addedTopDecls = pure []
+  | otherwise =
+      case convertToHsDecls generatedOrigin sourceLoc addedTopDecls of
+        Left _err ->
+          fail "TH host worker returned addTopDecls payload that GHC could not convert"
+        Right hsDecls ->
+          pure hsDecls
 
 generatedOrigin :: Origin
 generatedOrigin =
@@ -272,7 +312,6 @@ data PluginConfig = PluginConfig
   , pluginHostPackageIds :: ![String]
   , pluginHostSourceDirs :: ![FilePath]
   , pluginHostGhcOptions :: ![String]
-  , pluginWireFormat :: !WireFormat
   , pluginDebug :: !Bool
   }
   deriving (Eq, Show)
@@ -296,7 +335,6 @@ data WorkerHandle = WorkerHandle
 -- -fplugin-opt=THCross.Plugin:host-package-id=unit-id
 -- -fplugin-opt=THCross.Plugin:host-source-dir=src
 -- -fplugin-opt=THCross.Plugin:host-ghc-option=-DNAME
--- -fplugin-opt=THCross.Plugin:wire-format=text|raw-th
 -- -fplugin-opt=THCross.Plugin:debug
 -- @
 --
@@ -304,21 +342,28 @@ data WorkerHandle = WorkerHandle
 -- strings in that flag's fourth field instead of separate @-fplugin-opt@
 -- arguments.
 parsePluginConfig :: [CommandLineOption] -> IO PluginConfig
-parsePluginConfig opts =
+parsePluginConfig opts = do
+  rejectRemovedWireFormatOption opts
   case findWorkerPath opts of
-    Just workerPath -> do
-      wireFormat <- findWireFormat opts
+    Just workerPath ->
       pure
         PluginConfig
           { pluginWorkerPath = workerPath
           , pluginHostPackageIds = findHostPackageIds opts
           , pluginHostSourceDirs = findHostSourceDirs opts
           , pluginHostGhcOptions = findHostGhcOptions opts
-          , pluginWireFormat = wireFormat
           , pluginDebug = "debug" `elem` opts
           }
     Nothing ->
       ioError (userError "THCross.Plugin requires -fplugin-opt=THCross.Plugin:worker=/path/to/th-host-worker")
+
+rejectRemovedWireFormatOption :: [CommandLineOption] -> IO ()
+rejectRemovedWireFormatOption opts =
+  case listToMaybe (mapMaybe (stripPrefix "wire-format=") opts) of
+    Nothing ->
+      pure ()
+    Just _ ->
+      ioError (userError "THCross.Plugin no longer supports wire-format; raw TH is the only protocol")
 
 -- | Extract the external worker executable path from plugin options.
 --
@@ -344,15 +389,6 @@ findHostGhcOptions :: [CommandLineOption] -> [String]
 findHostGhcOptions =
   mapMaybe (stripPrefix "host-ghc-option=")
 
-findWireFormat :: [CommandLineOption] -> IO WireFormat
-findWireFormat opts =
-  case listToMaybe (mapMaybe (stripPrefix "wire-format=") opts) of
-    Nothing -> pure TextualWireFormat
-    Just "text" -> pure TextualWireFormat
-    Just "raw-th" -> pure RawTHWireFormat
-    Just unknown ->
-      ioError (userError ("unknown THCross.Plugin wire-format: " <> unknown))
-
 -- | Emit a plugin debug line when @debug@ was passed in plugin options.
 whenDebug :: PluginConfig -> String -> TcM ()
 whenDebug config message =
@@ -370,8 +406,8 @@ metaRequestKind = \case
 -- | Build the protocol request sent to the host worker.
 --
 -- The request contains enough diagnostic and matching information for the
--- worker to load the source module, capture the corresponding splice, and return
--- textual generated Haskell.
+-- worker to load the source module, capture the corresponding splice, and
+-- return raw Template Haskell AST.
 mkSpliceRequest ::
   String ->
   String ->
@@ -383,9 +419,8 @@ mkSpliceRequest ::
   [String] ->
   [FilePath] ->
   [String] ->
-  WireFormat ->
   SpliceRequest
-mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs hostGhcOptions wireFormat =
+mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr hostPackageIds hostSourceDirs hostGhcOptions =
   let (sourceFile, protocolSpan) = protocolSourceSpan sourceLoc
    in SpliceRequest
         { requestId = spliceModuleName <> ":" <> spliceKindToStr spliceKind <> ":" <> renderedSpan
@@ -400,7 +435,6 @@ mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSp
         , requestHostPackageIds = hostPackageIds
         , requestHostSourceDirs = hostSourceDirs
         , requestHostGhcOptions = hostGhcOptions
-        , requestWireFormat = wireFormat
         }
 
 -- | Convert GHC's source span into protocol data.
@@ -425,9 +459,8 @@ protocolSourceSpan = \case
 
 -- | Ask the configured host worker to evaluate one splice.
 --
--- This function is shared by expression and declaration splices. The caller is
--- responsible for parsing the returned textual Haskell into the result shape
--- required by the specific 'MetaRequest' constructor.
+-- This function is shared by all splice kinds. The caller is responsible for
+-- selecting the raw payload that matches the specific 'MetaRequest' constructor.
 requestWorker ::
   WorkerState ->
   PluginConfig ->
@@ -441,7 +474,7 @@ requestWorker ::
   TcM SpliceResult
 requestWorker workerState config spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr = do
   let workerRequest =
-        mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr (pluginHostPackageIds config) (pluginHostSourceDirs config) (pluginHostGhcOptions config) (pluginWireFormat config)
+        mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSpan spliceKey renderedSpliceExpr (pluginHostPackageIds config) (pluginHostSourceDirs config) (pluginHostGhcOptions config)
   whenDebug config ("worker: " <> pluginWorkerPath config)
   callWorker config workerState (pluginWorkerPath config) workerRequest >>= \case
     Left err -> do
@@ -481,14 +514,36 @@ replayForeignFiles config foreignFiles = do
         foreignFiles
 
 -- | Replay host-side @addTopDecls@ effects in the cross GHC session.
-replayAddedTopDecls :: PluginConfig -> String -> TcM ()
-replayAddedTopDecls config addedTopDecls
+replayAddedTopDecls :: PluginConfig -> SrcSpan -> [TH.Dec] -> TcM ()
+replayAddedTopDecls config sourceLoc addedTopDecls
   | null addedTopDecls = pure ()
   | otherwise = do
-      parsedDecls <- parseDeclarationFragments addedTopDecls
-      tcGblEnv <- getGblEnv
-      updTcRef (tcg_th_topdecls tcGblEnv) (parsedDecls <>)
+      parsedDecls <- convertAddedTopDecls sourceLoc addedTopDecls
+      recordAddedTopDecls parsedDecls
       whenDebug config ("th-cross: added top decls " <> show (length parsedDecls))
+
+recordAddedTopDecls :: [LHsDecl GhcPs] -> TcM ()
+recordAddedTopDecls declarations = do
+  mapM_ (checkTopDecl . unLoc) declarations
+  tcGblEnv <- getGblEnv
+  updTcRef (tcg_th_topdecls tcGblEnv) (declarations <>)
+  where
+    checkTopDecl (ValD _ binds) =
+      mapM_ bindName (collectHsBindBinders CollNoDictBinders binds)
+    checkTopDecl (SigD _ _) =
+      pure ()
+    checkTopDecl (AnnD _ _) =
+      pure ()
+    checkTopDecl (ForD _ (ForeignImport {fd_name = L _ name})) =
+      bindName name
+    checkTopDecl declaration =
+      addErr (TcRnTHError (AddTopDeclsError (InvalidTopDecl declaration)))
+
+    bindName (Exact name) = do
+      tcGblEnv <- getGblEnv
+      updTcRef (tcg_th_topnames tcGblEnv) (`extendNameSet` name)
+    bindName name =
+      addErr (TcRnTHError (THNameError (NonExactName name)))
 
 -- | Replay host-side @reportWarning@ and @reportError@ effects in cross GHC.
 replayDiagnostics :: [SpliceDiagnostic] -> TcM ()

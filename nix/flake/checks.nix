@@ -6,11 +6,7 @@
 {
   consumer-ghc9103-worker-smoke = pkgs.runCommand
     "th-cross-consumer-ghc9103-worker-smoke"
-    {
-      nativeBuildInputs = [
-        pkgs.haskell.compiler.ghc984
-      ];
-    }
+    { }
     ''
       build_dir="$TMPDIR/consumer-build"
       mkdir -p "$build_dir"
@@ -25,7 +21,7 @@
         -odir "$build_dir" \
         -stubdir "$build_dir" \
         -fplugin=THCross.Plugin \
-        -fplugin-opt=THCross.Plugin:worker=${packages.host-ghc984-worker}/bin/th-host-worker \
+        -fplugin-opt=THCross.Plugin:worker=${packages.host-ghc9103-worker}/bin/th-host-worker \
         ${testFixturesDir + "/Example.hs"}
 
       touch "$out"
