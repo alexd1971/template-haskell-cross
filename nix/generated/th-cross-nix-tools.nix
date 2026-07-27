@@ -8,7 +8,7 @@ mkDerivation {
   isLibrary = false;
   isExecutable = true;
   libraryHaskellDepends = [
-    base bytestring Cabal directory filepath
+    base bytestring Cabal directory filepath process
   ];
   executableHaskellDepends = [
     base bytestring Cabal directory filepath process

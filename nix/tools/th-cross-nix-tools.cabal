@@ -12,6 +12,8 @@ library th-cross-nix-tools-lib
   import: warnings
   exposed-modules:
       ThCross.NixTools.Cabal
+      ThCross.NixTools.PluginConfig
+      ThCross.NixTools.Validate
   hs-source-dirs:
       src
   default-language: Haskell2010
@@ -20,58 +22,20 @@ library th-cross-nix-tools-lib
       bytestring,
       Cabal,
       directory,
-      filepath
-
-executable dump-cabal-source-dirs
-  import: warnings
-  main-is:
-      Main.hs
-  hs-source-dirs:
-      app/dump-cabal-source-dirs
-  default-language: Haskell2010
-  build-depends:
-      base,
-      bytestring,
-      Cabal,
-      directory,
       filepath,
-      th-cross-nix-tools-lib
-
-executable dump-cabal-cpp-options
-  import: warnings
-  main-is:
-      Main.hs
-  hs-source-dirs:
-      app/dump-cabal-cpp-options
-  default-language: Haskell2010
-  build-depends:
-      base,
-      bytestring,
-      Cabal,
-      directory,
-      filepath,
-      th-cross-nix-tools-lib
-
-executable validate-cabal-component-context
-  import: warnings
-  main-is:
-      Main.hs
-  hs-source-dirs:
-      app/validate-cabal-component-context
-  default-language: Haskell2010
-  build-depends:
-      base,
-      Cabal,
-      directory,
-      filepath
-
-executable dump-th-cross-unit-id-map-options
-  import: warnings
-  main-is:
-      Main.hs
-  hs-source-dirs:
-      app/dump-th-cross-unit-id-map-options
-  default-language: Haskell2010
-  build-depends:
-      base,
       process
+
+executable th-cross-nix-tool
+  import: warnings
+  main-is:
+      Main.hs
+  hs-source-dirs:
+      app/th-cross-nix-tool
+  default-language: Haskell2010
+  build-depends:
+      base,
+      bytestring,
+      Cabal,
+      directory,
+      filepath,
+      th-cross-nix-tools-lib

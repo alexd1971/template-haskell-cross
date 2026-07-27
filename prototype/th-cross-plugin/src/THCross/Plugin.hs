@@ -17,9 +17,10 @@ import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Data.Binary (decodeOrFail)
 import qualified Data.ByteString.Lazy as LBS
+import Data.Char (isSpace)
 import Data.Data (Data, gmapT)
-import Data.List (stripPrefix)
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.List (dropWhileEnd, isPrefixOf, stripPrefix)
+import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Typeable (cast)
 import GHC.Data.FastString (unpackFS)
 import GHC.Driver.Env.Types (HscEnv (..))
@@ -31,8 +32,6 @@ import GHC.Driver.Plugins
   , purePlugin
   )
 import GHC.Hs
-import GHC.Hs.Utils (CollectFlag (CollNoDictBinders), collectHsBindBinders)
-import GHC.Parser.Annotation (getLocA)
 import GHC.Serialized (Serialized)
 import GHC.Settings.Config (cProjectVersion)
 import GHC.Tc.Errors.Types
@@ -64,7 +63,7 @@ import GHC.Types.SrcLoc
   )
 import GHC.Types.Name.Reader (RdrName (Exact))
 import GHC.Types.Name.Set (extendNameSet)
-import GHC.Unit.Module (moduleName, moduleNameString, moduleUnitId, unitIdString)
+import GHC.Unit.Module (moduleName, moduleUnitId, unitIdString)
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import GHCi.TH.Binary ()
 import qualified Language.Haskell.TH as TH
@@ -325,8 +324,8 @@ rewriteTHUnitIds unitIdMap =
         Nothing ->
           gmapT rewrite value
 
-    rewriteName (TH.Syntax.Name occ (TH.Syntax.NameG namespace packageName moduleName)) =
-      TH.Syntax.Name occ (TH.Syntax.NameG namespace (rewritePackageName packageName) moduleName)
+    rewriteName (TH.Syntax.Name occ (TH.Syntax.NameG namespace packageName nameModule)) =
+      TH.Syntax.Name occ (TH.Syntax.NameG namespace (rewritePackageName packageName) nameModule)
     rewriteName name =
       name
 
@@ -379,7 +378,8 @@ data WorkerHandle = WorkerHandle
 -- strings in that flag's fourth field instead of separate @-fplugin-opt@
 -- arguments.
 parsePluginConfig :: [CommandLineOption] -> IO PluginConfig
-parsePluginConfig opts = do
+parsePluginConfig rawOpts = do
+  opts <- expandConfigOptions rawOpts
   rejectRemovedWireFormatOption opts
   unitIdMap <-
     case findUnitIdMap opts of
@@ -400,6 +400,26 @@ parsePluginConfig opts = do
           }
     Nothing ->
       ioError (userError "THCross.Plugin requires -fplugin-opt=THCross.Plugin:worker=/path/to/th-host-worker")
+
+expandConfigOptions :: [CommandLineOption] -> IO [CommandLineOption]
+expandConfigOptions opts = do
+  fileOptions <- traverse readConfigFile (mapMaybe (stripPrefix "config=") opts)
+  pure (filter (not . isConfigOption) opts <> concat fileOptions)
+  where
+    isConfigOption =
+      isJust . stripPrefix "config="
+
+readConfigFile :: FilePath -> IO [CommandLineOption]
+readConfigFile path = do
+  contents <- readFile path
+  pure (filter isOptionLine (map stripLine (lines contents)))
+  where
+    isOptionLine line =
+      not (null line) && not ("#" `isPrefixOf` line)
+
+stripLine :: String -> String
+stripLine =
+  dropWhileEnd isSpace . dropWhile isSpace
 
 rejectRemovedWireFormatOption :: [CommandLineOption] -> IO ()
 rejectRemovedWireFormatOption opts =

@@ -1,10 +1,6 @@
 cradle:
   cabal:
-    - path: "app/dump-cabal-source-dirs"
-      component: "exe:dump-cabal-source-dirs"
-    - path: "app/dump-cabal-cpp-options"
-      component: "exe:dump-cabal-cpp-options"
-    - path: "app/validate-cabal-component-context"
-      component: "exe:validate-cabal-component-context"
-    - path: "app/dump-th-cross-unit-id-map-options"
-      component: "exe:dump-th-cross-unit-id-map-options"
+    - path: "src"
+      component: "lib:th-cross-nix-tools-lib"
+    - path: "app/th-cross-nix-tool"
+      component: "exe:th-cross-nix-tool"

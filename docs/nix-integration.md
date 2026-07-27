@@ -142,12 +142,12 @@ TH_HOST_GHC_LIBDIR=/nix/store/...-ghc-9.10.3-with-packages/lib/ghc-9.10.3/lib
 ```
 
 The same derived names are resolved through the host GHC package DB with
-`ghc-pkg field <package> id --simple-output`, then passed as exact host package
-exposure through plugin options:
+`ghc-pkg field <package> id --simple-output`, then written as exact host
+package exposure into the generated plugin config file:
 
 ```text
--fplugin-opt=THCross.Plugin:host-package-id=microlens-0.4.14.0-...
--fplugin-opt=THCross.Plugin:host-package-id=microlens-th-0.4.3.17-...
+host-package-id=microlens-0.4.14.0-...
+host-package-id=microlens-th-0.4.3.17-...
 ```
 
 The plugin serializes these unit ids into the binary-framed splice request as
@@ -160,8 +160,10 @@ Raw TH payloads can also contain exact `NameG` references to package ids that
 are not directly loadable in the target package DB. They may be host installed
 unit ids, or source package ids such as `microlens-0.4.14.0`. Neither form is a
 safe cross-side lookup key. The Nix experiment therefore also derives
-`unit-id-map=from-id=target-unit-id` plugin options by matching package names in
-the host and target package DBs. The mapping covers both the target component
+`unit-id-map=from-id=target-unit-id` entries by matching package names in the
+host and target package DBs. These entries are written to `th-cross-plugin-options`
+and loaded through a short `config=<path>` plugin option, avoiding a huge
+`-fplugin-library` argument. The mapping covers both the target component
 package DB and the target global package DB, because real generators such as
 `aeson-th` can emit exact names for global packages such as `text`. The
 cross-side plugin rewrites exact TH names through that map before calling
@@ -384,22 +386,19 @@ package mechanism also derives external package names from both library and
 executable component dependencies while filtering the package's own internal
 library dependency out of the external host package set.
 
-The source-directory data is deliberately derived from Cabal syntax instead of
-hardcoded Nix metadata. The generic-builder wrapper compiles
-`nix/tools/dump-cabal-source-dirs.hs` with the native Cabal library, runs it in
-the unpacked package directory, extracts `hs-source-dirs` from library,
-executable, test, and benchmark components, and embeds each directory into the
-fourth field of `-fplugin-library` as `host-source-dir=...`. Separate
-`-fplugin-opt=THCross.Plugin:...` arguments are not used on this path, because
-external plugins loaded through `-fplugin-library` receive the option list from
-the `-fplugin-library` argument.
-
-The same path now derives unconditional Cabal `cpp-options` with
-`nix/tools/dump-cabal-cpp-options.hs`. Each extracted option is embedded into
-the plugin option list as:
+The plugin config is deliberately derived from Cabal syntax instead of hardcoded
+Nix metadata. The generic-builder wrapper runs
+`th-cross-nix-tool plugin-config` in the unpacked package directory. The tool
+extracts `hs-source-dirs` and unconditional `cpp-options` from library,
+executable, test, and benchmark components, resolves host package ids, derives
+the raw TH unit-id map, and writes all entries to `th-cross-plugin-options`.
+Separate `-fplugin-opt=THCross.Plugin:...` arguments are not used on this path,
+because external plugins loaded through `-fplugin-library` receive the option
+list from the `-fplugin-library` argument. The fourth field of
+`-fplugin-library` only points at the generated config file:
 
 ```text
-host-ghc-option=<cpp option>
+["config=/build/<package>/th-cross-plugin-options"]
 ```
 
 The `th-target-context-consumer` package uses this for a CPP-sensitive splice:
@@ -433,7 +432,7 @@ Cabal `setup-config`, but package selection is still not a complete Cabal
 component-context model. The Nix experiment reads nixpkgs Haskell derivation
 `passthru.getCabalDeps`, extracts dependency `pname`s, builds a matching GHC
 9.10.3 host package DB, resolves exact host unit ids with host `ghc-pkg`, and
-passes matching `host-package-id` and `unit-id-map` plugin options
+passes matching `host-package-id` and `unit-id-map` config entries
 automatically. A production integration still needs a model for renamed
 packages, internal libraries beyond the current package, setup dependencies, and
 packages whose host package-set attribute is not the same as the Cabal package

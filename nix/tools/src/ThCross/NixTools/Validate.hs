@@ -1,9 +1,8 @@
--- | Validate Nix-derived host package names against Cabal's configured
--- component dependency graph.
---
--- This catches cases where the worker package DB assembled at Nix evaluation
--- time no longer matches the dependencies Cabal actually selected during
--- `Setup configure`.
+-- | Validate Nix-derived host package names against Cabal setup-config.
+module ThCross.NixTools.Validate
+  ( validateCabalComponentContext
+  ) where
+
 import Control.Monad (unless)
 import Data.List (intercalate, nub, sort)
 import Distribution.Simple.Configure (getPersistBuildConfig)
@@ -24,7 +23,6 @@ import Distribution.Types.UnitId
   , unUnitId
   )
 import System.Directory (createDirectoryIfMissing)
-import System.Environment (getArgs)
 import System.Exit (die)
 import System.FilePath ((</>))
 
@@ -32,15 +30,6 @@ data ComponentDependency = ComponentDependency
   { dependencyPackageName :: String
   , dependencyUnitId :: String
   }
-
-main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    [expectedPackagesFile, excludedPackagesFile, outputDir] ->
-      validateCabalComponentContext expectedPackagesFile excludedPackagesFile outputDir
-    _ ->
-      die "usage: validate-cabal-component-context EXPECTED_PACKAGES EXCLUDED_PACKAGES OUTPUT_DIR"
 
 validateCabalComponentContext :: FilePath -> FilePath -> FilePath -> IO ()
 validateCabalComponentContext expectedPackagesFile excludedPackagesFile outputDir = do

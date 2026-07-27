@@ -146,63 +146,26 @@ template-haskell
 ${pkgs.lib.concatStringsSep "\n" excludedPackageNames}
 EOF
 
-          ${hs.nixTools}/bin/validate-cabal-component-context \
+          ${hs.nixTools}/bin/th-cross-nix-tool \
+            validate-cabal-component-context \
             "$expected_packages" \
             "$excluded_packages" \
             "$out/nix-support"
         '';
 
-      appendCabalSourceDirsToPluginOptions =
-        ''
-          ${hs.nixTools}/bin/dump-cabal-source-dirs \
-            > th-cross-cabal-source-dirs
-
-          while IFS= read -r source_dir; do
-            if [ -n "$source_dir" ]; then
-              plugin_options="$plugin_options,\"host-source-dir=$PWD/$source_dir\""
-            fi
-          done < th-cross-cabal-source-dirs
-        '';
-
-      appendCabalCppOptionsToPluginOptions =
-        ''
-          ${hs.nixTools}/bin/dump-cabal-cpp-options \
-            > th-cross-cabal-cpp-options
-
-          while IFS= read -r cpp_option; do
-            if [ -n "$cpp_option" ]; then
-              plugin_options="$plugin_options,\"host-ghc-option=$cpp_option\""
-            fi
-          done < th-cross-cabal-cpp-options
-        '';
-
-      appendHostPackageIdsToPluginOptions =
+      generatePluginConfig =
+        worker:
         hostGhcPkg:
         hostPackageNames:
-        pkgs.lib.concatMapStringsSep "\n" (packageName: ''
-          host_package_id="$("${hostGhcPkg}" field ${pkgs.lib.escapeShellArg packageName} id --simple-output)"
-          plugin_options="$plugin_options,\"host-package-id=$host_package_id\""
-        '') hostPackageNames;
-
-      appendUnitIdMapOptions =
-        hostGhcPkg:
         ''
-          ${hs.nixTools}/bin/dump-th-cross-unit-id-map-options \
+          ${hs.nixTools}/bin/th-cross-nix-tool \
+            plugin-config \
+            th-cross-plugin-options \
+            "${worker}" \
             "${hostGhcPkg}" \
             "${targetGhcPkg}" \
             "$packageConfDir" \
-            > th-cross-unit-id-map-options
-
-          while IFS= read -r plugin_option; do
-            if [ -n "$plugin_option" ]; then
-              plugin_options="$plugin_options,\"$plugin_option\""
-            fi
-          done < th-cross-unit-id-map-options
-        '';
-
-      finalizePluginOptions =
-        ''
-          plugin_options="$plugin_options]"
+            ${pkgs.lib.concatMapStringsSep " " pkgs.lib.escapeShellArg hostPackageNames}
         '';
 
       appendCrossPluginFlags =
@@ -210,7 +173,7 @@ EOF
           appendToVar configureFlags "--ghc-option=-v0"
           appendToVar configureFlags "--ghc-option=-fno-external-interpreter"
           appendToVar configureFlags "--ghc-option=-fforce-recomp"
-          appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;$plugin_options"
+          appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;[\"config=$PWD/th-cross-plugin-options\"]"
         '';
 
       mkConsumerDerivationWithWorker =
@@ -240,15 +203,10 @@ EOF
               # be discoverable at plugin load time.
               export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-              # Build the JSON-like option list passed as the fourth
-              # `-fplugin-library` field. Each block appends one category of
-              # cross/host context required by the plugin and worker.
-              plugin_options="[\"worker=${workerContext.worker}\""
-              ${appendHostPackageIdsToPluginOptions workerContext.hostGhcPkg externalHostPackageNames}
-              ${appendUnitIdMapOptions workerContext.hostGhcPkg}
-              ${appendCabalSourceDirsToPluginOptions}
-              ${appendCabalCppOptionsToPluginOptions}
-              ${finalizePluginOptions}
+              # Keep the `-fplugin-library` option short and stable. The helper
+              # derives the worker, host package ids, unit-id map, source dirs,
+              # and CPP options into one config file.
+              ${generatePluginConfig workerContext.worker workerContext.hostGhcPkg externalHostPackageNames}
               ${appendCrossPluginFlags}
             '';
             postConfigure =
