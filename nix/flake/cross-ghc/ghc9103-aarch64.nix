@@ -1,6 +1,6 @@
 # Patched cross-GHC 9.10.3 producing aarch64-linux binaries.
 #
-# Applies three changes (documented in passthru.crossPatchNotes):
+# Applies three cross-GHC changes (documented in passthru.crossPatchNotes):
 #   P1  Force HAVE_INTERNAL_INTERPRETER in the compiler package
 #   P2  --export-dynamic on stage0 ghc-bin
 #   P3  Empty ThModFinalizers are no-ops

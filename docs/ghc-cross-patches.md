@@ -1,8 +1,12 @@
-# GHC Cross-Compiler Patches for `-fplugin-library`
+# GHC Patches for Cross TH
 
-This document describes the GHC changes required to make a cross-GHC
-load a native plugin through `-fplugin-library` and delegate Template
-Haskell evaluation to the build-host worker.
+This document describes the GHC changes required by the current cross TH
+prototype. There are two affected compilers:
+
+- the aarch64 cross-GHC, which must load a native plugin through
+  `-fplugin-library` and continue without a target interpreter;
+- the native worker GHC, which must expose raw Template Haskell runner APIs and
+  capture raw `addTopDecls` payloads.
 
 Target: GHC 9.10.3 producing `aarch64-linux` binaries.
 The patches live in `nix/patches/`.
@@ -19,12 +23,13 @@ on the build host instead:
 1. loading a **native plugin** into the cross-GHC process via
    `-fplugin-library`;
 2. the plugin intercepts `runMetaHook` and delegates splice evaluation
-   to a **native host worker** built with the same patched GHC 9.10.3;
+   to a **native host worker** built with a compatible patched GHC 9.10.3;
 3. the worker returns binary-encoded Template Haskell AST values;
 4. the cross compiler converts them locally and continues normal
    compilation.
 
-Plain nixpkgs cross-GHC needs the following patches for this flow.
+Plain nixpkgs cross-GHC needs P1-P3 for this flow. The native worker GHC needs
+P4.
 
 ---
 
@@ -131,6 +136,9 @@ submitted independently of the TH cross work.
 
 **File**: `nix/patches/ghc-9.10.3-export-runth.patch`
 
+**Applies to**: native patched worker GHC (`packages.*.patched-ghc9103`), not
+the aarch64 cross-GHC derivation.
+
 **What**:
 
 - exports `runTHExp`, `runTHPat`, `runTHType`, and `runTHDec` from
@@ -152,14 +160,20 @@ GHC grows a supported hook for observing TH side effects before conversion.
 
 ## Usage
 
+The patched native worker GHC is exposed as:
+
+```bash
+nix build .#patched-ghc9103
+```
+
 The patched cross-GHC is exposed as:
 
 ```bash
 nix build .#cross-ghc9103-aarch64-linux
 ```
 
-The derivation's `passthru.crossPatchNotes` contains structured
-metadata about each patch.
+The derivation's `passthru.crossPatchNotes` contains structured metadata about
+the cross-GHC patches P1-P3.
 
 Cross-compilation of packages using this GHC is demonstrated in the
 experiment packages:
