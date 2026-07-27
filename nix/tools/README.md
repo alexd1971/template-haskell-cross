@@ -65,3 +65,8 @@ unit-id-map=microlens-0.4.14.0-8xVr...=microlens-0.4.14.0-2EU...
 The first form maps source package ids. The second maps host installed unit ids.
 Both forms can appear in raw TH exact names, while `GHC.ThToHs` needs names that
 resolve in the target package DB.
+
+The tool emits mappings for the target component package DB first and then for
+the target global package DB. Component mappings take precedence in the plugin,
+while global mappings cover exact names produced by real TH generators for boot
+or global packages, for example `text`.

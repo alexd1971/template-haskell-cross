@@ -84,9 +84,12 @@ host architecture:
   `makeLenses ''User` through the host worker while cross-compiling
   the package with the patched aarch64 GHC 9.10.3;
 - `consumer-ghc9103-cross-aeson-package` builds `th-aeson-consumer`, a package
-  that depends on the real `aeson` TH generator and runs a declaration splice
-  `foldMap (deriveJSON defaultOptions) [...]` through the host worker while
-  cross-compiling the package with the patched aarch64 GHC 9.10.3;
+  that depends on the real `aeson` TH generator and uses a small multi-module
+  domain/API structure. It derives JSON instances for nested records, sum
+  types, `Maybe`, lists, custom field modifiers, and `TaggedObject` encoding
+  through the host worker while cross-compiling the package with the patched
+  aarch64 GHC 9.10.3. It also includes a local declaration generator to check
+  TH imported from the package currently being compiled;
 - `consumer-ghc9103-cross-executable-package` builds
   `th-executable-consumer`, a package with a library component and an
   executable component. The executable imports a TH generator from its own
@@ -158,8 +161,11 @@ are not directly loadable in the target package DB. They may be host installed
 unit ids, or source package ids such as `microlens-0.4.14.0`. Neither form is a
 safe cross-side lookup key. The Nix experiment therefore also derives
 `unit-id-map=from-id=target-unit-id` plugin options by matching package names in
-the host and target package DBs. The cross-side plugin rewrites exact TH names
-through that map before calling `GHC.ThToHs.convertToHs...`.
+the host and target package DBs. The mapping covers both the target component
+package DB and the target global package DB, because real generators such as
+`aeson-th` can emit exact names for global packages such as `text`. The
+cross-side plugin rewrites exact TH names through that map before calling
+`GHC.ThToHs.convertToHs...`.
 
 This uses nixpkgs' own evaluation-time Haskell dependency metadata instead of
 parsing the `.cabal` file directly. It still assumes that each extracted package
@@ -331,7 +337,7 @@ Run the `aeson` TH smoke:
 
 ```bash
 nix build .#consumer-ghc9103-cross-aeson-package -L --allow-import-from-derivation
-find -L result -maxdepth 8 \( -name 'Example*.hi' -o -name 'Example*.dyn_hi' -o -name '*.conf' \) -print
+find -L result -maxdepth 8 \( -name 'AesonConsumer*.hi' -o -name 'AesonConsumer*.dyn_hi' -o -name '*.conf' \) -print
 ```
 
 Observed result: the package installs aarch64 target artifacts for

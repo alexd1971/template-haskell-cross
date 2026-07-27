@@ -6,12 +6,19 @@ build-type: Simple
 
 library
   exposed-modules:
-      Example
+      AesonConsumer
+  other-modules:
+      AesonConsumer.Api.Payload
+      AesonConsumer.Domain.Address
+      AesonConsumer.Domain.User
+      AesonConsumer.JsonOptions
+      AesonConsumer.TH
   hs-source-dirs:
       src
   default-language: Haskell2010
   build-depends:
       aeson,
-      base >= 4.19 && < 4.22
+      base >= 4.19 && < 4.22,
+      template-haskell
   ghc-options:
       -Wall

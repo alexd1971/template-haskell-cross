@@ -20,30 +20,36 @@ main = do
 dumpUnitIdMapOptions :: FilePath -> FilePath -> FilePath -> IO ()
 dumpUnitIdMapOptions hostGhcPkg targetGhcPkg targetPackageDb = do
   _ <- targetGhcPkg_ ["--package-db=" <> targetPackageDb, "recache"]
-  targetPackages <-
-    words <$> targetGhcPkg_ ["--package-db=" <> targetPackageDb, "list", "--simple-output"]
-  forM_ targetPackages $ \targetPackage -> do
-    targetUnitIds <-
-      words <$> targetGhcPkg_ ["--package-db=" <> targetPackageDb, "field", targetPackage, "id", "--simple-output"]
-    case targetUnitIds of
-      [targetUnitId] -> do
-        packageName <-
-          stripLine <$> targetGhcPkg_ ["--package-db=" <> targetPackageDb, "field", targetPackage, "name", "--simple-output"]
-        packageVersion <-
-          stripLine <$> targetGhcPkg_ ["--package-db=" <> targetPackageDb, "field", targetPackage, "version", "--simple-output"]
-        putStrLn ("unit-id-map=" <> packageName <> "-" <> packageVersion <> "=" <> targetUnitId)
-        hostUnitIdsResult <-
-          tryGhcPkg hostGhcPkg ["field", packageName, "id", "--simple-output"]
-        case words <$> hostUnitIdsResult of
-          Just [hostUnitId] ->
-            putStrLn ("unit-id-map=" <> hostUnitId <> "=" <> targetUnitId)
-          _ ->
-            pure ()
-      _ ->
-        pure ()
+  dumpPackageDbOptions ["--package-db=" <> targetPackageDb]
+  dumpPackageDbOptions []
   where
     targetGhcPkg_ =
       ghcPkg targetGhcPkg
+
+    dumpPackageDbOptions targetPackageDbArgs = do
+      targetPackages <-
+        words <$> targetGhcPkg_ (targetPackageDbArgs <> ["list", "--simple-output"])
+      forM_ targetPackages $ dumpPackageOptions targetPackageDbArgs
+
+    dumpPackageOptions targetPackageDbArgs targetPackage = do
+      targetUnitIds <-
+        words <$> targetGhcPkg_ (targetPackageDbArgs <> ["field", targetPackage, "id", "--simple-output"])
+      case targetUnitIds of
+        [targetUnitId] -> do
+          packageName <-
+            stripLine <$> targetGhcPkg_ (targetPackageDbArgs <> ["field", targetPackage, "name", "--simple-output"])
+          packageVersion <-
+            stripLine <$> targetGhcPkg_ (targetPackageDbArgs <> ["field", targetPackage, "version", "--simple-output"])
+          putStrLn ("unit-id-map=" <> packageName <> "-" <> packageVersion <> "=" <> targetUnitId)
+          hostUnitIdsResult <-
+            tryGhcPkg hostGhcPkg ["field", packageName, "id", "--simple-output"]
+          case words <$> hostUnitIdsResult of
+            Just [hostUnitId] ->
+              putStrLn ("unit-id-map=" <> hostUnitId <> "=" <> targetUnitId)
+            _ ->
+              pure ()
+        _ ->
+          pure ()
 
 -- | Run a required @ghc-pkg@ query and fail the tool if it fails.
 ghcPkg :: FilePath -> [String] -> IO String
