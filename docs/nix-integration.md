@@ -259,7 +259,7 @@ nix run .#regen-cabal-nix
 Keeping these files checked in avoids `allow-import-from-derivation` during
 normal flake evaluation.
 
-## Cross-GHC Without iserv Dependencies
+## Cross-GHC Without Interpreter Baggage
 
 The current `cross-ghc9103-aarch64-linux` derivation starts from
 `pkgs.pkgsCross.aarch64-multiplatform.buildPackages.haskell.compiler.ghc9103`.
@@ -268,10 +268,24 @@ target `iserv`. The TH cross prototype does not use target iserv: splice
 evaluation happens in the native worker and the cross compiler only loads a
 native plugin.
 
-This suggests a useful follow-up experiment: derive a leaner cross-GHC package
-from the same nixpkgs/Hadrian machinery but disable or avoid target-iserv
-closure pieces that are irrelevant to this architecture. The expected invariant
-is:
+Current inspection result:
+
+- runtime closure size is about 2.9 GB;
+- the installed cross-GHC does not contain `ghc-iserv` or `remote-iserv`
+  binaries;
+- `network` is not present in the runtime closure or installed package DB;
+- target package `ghci` is installed and registered;
+- `compiler/ghc.cabal.in` depends on `ghci` unconditionally, while
+  `ghc/ghc-bin.cabal.in` adds the interactive UI dependencies only when
+  `internal-interpreter` is enabled.
+
+So the immediate optimization target is not a separate `iserv` executable or
+`network` package dependency. The visible interpreter-related baggage is the
+target `ghci` package and the compiler modules that import `GHCi.*`.
+
+This suggests a follow-up experiment: derive a leaner cross-GHC package from
+the same nixpkgs/Hadrian machinery, but make it a separate probe first. The
+expected invariant is:
 
 ```text
 cross GHC still supports normal aarch64 compilation
@@ -279,7 +293,8 @@ cross GHC still loads THCross.Plugin through -fplugin-library
 cross GHC does not need a target interpreter for TH splice execution
 ```
 
-The work should start by inspecting the closure and dependency graph of
-`cross-ghc9103-aarch64-linux`, then removing only dependencies proven to belong
-to unused iserv support. The current derivation intentionally remains unchanged
-until that experiment is verified by the consumer package builds above.
+The probe should not replace `cross-ghc9103-aarch64-linux` until it passes the
+consumer package builds. A safe first step is a
+`cross-ghc9103-aarch64-linux-lean-probe` that reports closure/package-db
+contents and then tries the smallest source or Hadrian patch needed to remove
+unused interpreter pieces.
