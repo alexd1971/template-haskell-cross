@@ -131,20 +131,21 @@ then `reify ''GeneratedUser`.
 
 ## Current Limitations
 
-Still unsupported:
+Still unsupported or intentionally limited:
 
 - target-only modules/imports;
-- target-like CPP/package configuration;
+- complete Cabal component context derivation outside the explicit host package
+  id/source dir/GHC option forwarding used by the current Nix experiments;
 - complete `Q` side-effect replay;
+- cross-version worker/consumer pairs.
 
-Target context limitations are detailed in `docs/target-context.md`. Modules
-that native GHC cannot load at all are covered by
-`docs/target-only-modules.md`.
+Target context handling is detailed in `docs/target-context.md`. Modules that
+native GHC cannot load at all are covered by `docs/target-only-modules.md`.
 
 The cross-side plugin now routes expression, type, pattern, and declaration
 splices through the worker in worker mode. Annotation-wrapper requests are used
-internally for annotation replay; cross-version compatibility is conditional and
-covered by the explicit probes in `docs/cross-version.md`.
+internally for annotation replay. They are same-version binary payloads, not a
+stable cross-version format.
 
 ## Operational Notes
 
@@ -161,9 +162,9 @@ TH_HOST_GHC_LIBDIR=/path/to/host/ghc/libdir
 ```
 
 The override is important when the worker runs inside a different consumer GHC
-environment. For example, a worker built with GHC 9.8.4 may be launched while
-the consumer package is being built with GHC 9.10.3. In that case discovering
-`ghc` from `PATH` would find the wrong compiler libdir.
+environment. The worker is built with the patched native GHC 9.10.3 used for
+raw TH capture; discovering `ghc` from `PATH` could find an unrelated compiler
+libdir.
 
 Without an explicit libdir, an executable launched from `dist-newstyle` can also
 make `runGhc Nothing` look for `lib/settings` relative to the worker binary.
@@ -175,67 +176,36 @@ The worker adds the requested source file directory to the native GHC session's
 `importPaths`. This lets module-aware evaluation find sibling generator modules
 used by test files.
 
-Generated declarations are pretty-printed with `sdocSuppressUniques = True`.
-Without this, GHC can print names like `GeneratedUser_a2aU`, which are valid
-debug output but wrong as textual Haskell returned to the cross-side parser.
+## Why Not Textual Rendering
 
-## Declaration Rendering Limitation
+The previous prototype serialized splice results by pretty-printing generated
+GHC AST as Haskell source and reparsing it on the consumer side. That path is
+now legacy.
 
-The prototype currently serializes generated declarations by applying GHC's
-normal `ppr` to `LHsDecl GhcPs` and reparsing the resulting text on the
-consumer side.
+Textual rendering was useful as an early process-boundary proof, but it is not a
+complete representation of Template Haskell results:
 
-This is not guaranteed to be parser-roundtrippable. A concrete failing case is
-an annotation declaration with a type signature:
+- pretty-printed GHC AST is diagnostic output, not a guaranteed parser
+  round-trip format;
+- generated code can refer to exact `TH.Name`s that cannot be reconstructed
+  from source text;
+- real packages such as `aeson` can generate references whose constructors or
+  helpers live in internal/non-exported modules, so the consumer module cannot
+  legally name them in textual Haskell.
 
-```haskell
-{-# ANN module (42 :: Int) #-}
-```
+The active worker therefore captures raw `TH.Exp`, `TH.Pat`, `TH.Type`, and
+`[TH.Dec]` values after `runMeta'` executes the host-side `Q` action. It returns
+those values through the binary protocol and converts the same values locally so
+native compilation can continue.
 
-GHC 9.8.4 can pretty-print the generated declaration as:
+## `addTopDecls`
 
-```haskell
-{-# ANN module 42 :: GHC.Types.Int #-}
-```
+`addTopDecls` is also raw-only. The GHC patch records the original `[TH.Dec]`
+argument supplied to `qAddTopDecls` in addition to GHC's normal converted
+top-level declarations. The worker returns that raw list in `addedTopDecls`, and
+the cross-side plugin converts it with `convertToHsDecls`.
 
-That text is useful diagnostic output, but it is not accepted by the parser as
-a declaration fragment. The parser expects parentheses around the annotated
-expression when it contains a type signature.
-
-This affects mixed paths such as:
-
-```text
-expression splice
-  -> addTopDecls [annotation declaration]
-  -> worker pretty-prints added declaration
-  -> consumer reparses added declaration
-```
-
-It does not invalidate the separate `MetaAW` binary compatibility probe in
-`docs/cross-version.md`, because direct source annotations exercise
-`MetaAW` without first going through declaration pretty-print/reparse.
-
-### Source-like Printer Investigation
-
-GHC 9.8.4 exposes `GHC.Parser.Annotation`, but does not expose a general
-source-like printer that can turn generated `GhcPs` declarations into guaranteed
-parser-roundtrippable source.
-
-HLS uses `ghc-exactprint` for source-preserving rewrites, but for generated AST
-nodes its annotation path still starts from:
-
-```haskell
-render dflags = showSDoc dflags . ppr
-```
-
-and then reparses that rendered text to compute exact-print annotations. That
-does not solve cases where `ppr` itself is not parser-roundtrippable.
-
-Current decision:
-
-- keep generic declaration rendering as an MVP limitation;
-- prefer direct textual splice results for normal declaration splices;
-- treat `addTopDecls` declaration replay as best-effort until a more robust
-  source renderer or targeted declaration renderer is implemented;
-- if needed, handle specific declaration constructors such as `AnnD` with
-  targeted source rendering rather than assuming generic `ppr` is source.
+For non-declaration splices, the cross-side plugin also mirrors the relevant
+`tcg_th_topnames` update for exact binders. This preserves relationships such as
+a declaration added through `addTopDecls` being referenced by an exact
+`newName`-generated name in the normal splice result.

@@ -302,7 +302,7 @@ find -L result -maxdepth 7 \( -type f -o -type l \) | sort
 
 Observed result: the generic builder invokes the patched
 `aarch64-unknown-linux-gnu-ghc-9.10.3`, loads `THCross.Plugin` through
-`-fplugin-library`, starts the GHC 9.8.4 host worker, expands the expression
+`-fplugin-library`, starts the patched GHC 9.10.3 host worker, expands the expression
 splice from `src/Example.hs`, where the splice calls a generator imported from
 `src/Gen.hs`, and installs target package artifacts including the package conf,
 `.hi`, `.dyn_hi`, static library, and shared library.
@@ -452,8 +452,8 @@ This confirms the local Nix wiring:
 
 ```text
 GHC 9.10.3 plugin package
-  -> /nix/store host worker built with GHC 9.8.4
-  -> textual expression expansion
+  -> /nix/store host worker built with patched GHC 9.10.3
+  -> raw TH expression expansion
 ```
 
 The worker smoke checks confirm direct `ghc` invocation wiring. The
@@ -505,7 +505,7 @@ This confirms:
 - Cabal reads the `th-consumer-example.cabal` package description;
 - Cabal configures the library component with the patched aarch64 cross-GHC;
 - the cross-GHC loads `THCross.Plugin` through `-fplugin-library`;
-- the plugin delegates TH execution to the native GHC 9.8.4 worker;
+- the plugin delegates TH execution to the patched native GHC 9.10.3 worker;
 - the worker evaluates a splice whose generator is imported from the package's
   separate `Gen` module;
 - Cabal installs the resulting target library output under the derivation
@@ -567,7 +567,14 @@ th-cross-build
 Build a specific Cabal target:
 
 ```bash
-th-cross-build th-host-worker
+th-cross-build th-cross-plugin
+```
+
+`th-host-worker` must be built through Nix because it depends on the patched
+GHC API:
+
+```bash
+nix build .#host-ghc9103-worker
 ```
 
 Run the integration test:

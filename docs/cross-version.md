@@ -153,15 +153,18 @@ GHC 9.4.8 cross compiler:    blocked (no -fplugin-library, no interpreter)
 
 ## Cabal Bounds
 
-The plugin library is built against GHC 9.8 and 9.10:
+The active plugin and worker packages are built against GHC 9.10.x only:
 
 ```cabal
-base >= 4.19 && < 4.22
-ghc >= 9.8 && < 9.11
-ghc-boot >= 9.8 && < 9.11
+base >= 4.20 && < 4.22
+ghc >= 9.10 && < 9.11
+ghc-boot >= 9.10 && < 9.11
 ```
 
-The host worker remains pinned to GHC 9.8.4.
+The host worker is built with patched native GHC 9.10.3. The raw protocol relies
+on same-version `template-haskell` `Binary` instances and on patched GHC API for
+raw TH capture, so GHC 9.8/9.4 support is retained only as historical context in
+this document.
 
 ## Scope
 
@@ -176,7 +179,8 @@ Not confirmed by this test:
 
 - broad source compatibility across future GHC APIs;
 - semantic compatibility for target-specific CPP or target-only imports.
-- production compatibility for the planned binary Template Haskell AST payload.
+- production compatibility for cross-version binary Template Haskell AST
+  payloads.
 
 ## Binary Annotation Wrapper Probe
 
@@ -249,8 +253,8 @@ Interpretation:
 - broader annotation values and future GHC versions need more entries in this
   matrix.
 
-`AddTopDeclsAnnotation.hs` is a separate mixed-path case. It first transports
-generated declaration text through `addTopDecls`, and that generated declaration
-can then trigger `MetaAW`. This is useful, but it is not a clean binary
-compatibility probe because failures can also come from declaration
-pretty-print/reparse round-tripping.
+`AddTopDeclsAnnotation.hs` was a separate legacy mixed-path case. It first
+transported generated declaration text through `addTopDecls`, and that generated
+declaration could then trigger `MetaAW`. This was useful for the legacy textual
+implementation, but it is no longer a clean compatibility probe for the active
+raw-only implementation.

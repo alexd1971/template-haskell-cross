@@ -162,7 +162,10 @@ Fields:
 
 ## Versioning
 
-The first prototype has no explicit protocol version field. Backward-compatible
-fields may be added later. The first breaking change should add:
+The first prototype has no explicit protocol version field. Because the payload
+contains `Binary`-encoded same-version Template Haskell values, compatibility is
+currently defined by using the same patched GHC/template-haskell version on both
+sides.
 
-to both request and response payloads.
+If the implementation later needs to support multiple incompatible protocol
+shapes, add an explicit version field to both request and response payloads.

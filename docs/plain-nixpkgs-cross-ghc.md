@@ -86,32 +86,34 @@ ghc910  rejected: GHC >= 9.6 can't be cross-compiled
 ghc9103 rejected: GHC >= 9.6 can't be cross-compiled
 ```
 
-## Effect On This Prototype
+## Legacy Effect On This Prototype
 
-Only the host worker is intentionally tied to GHC 9.8.4:
+This section describes the original textual-protocol prototype. It is retained
+for historical context only.
+
+At that point only the host worker was intentionally tied to GHC 9.8.4:
 
 ```text
 th-host-worker:
   ghc == 9.8.4
 ```
 
-The consumer/cross compiler does not have to be GHC 9.8.4. The protocol sends
-textual Haskell fragments, so the consumer compiler should parse the returned
-fragment with its own parser. This is the reason cross-version tests with a GHC
-9.8.4 worker and a GHC 9.10.3 consumer are useful.
+The consumer/cross compiler did not have to be GHC 9.8.4 because the legacy
+protocol sent textual Haskell fragments and asked the consumer compiler to parse
+the returned fragment with its own parser. This was the reason cross-version
+tests with a GHC 9.8.4 worker and a GHC 9.10.3 consumer were useful.
 
-The current `THCross.Plugin` package is still limited to GHC 9.8 through GHC
-9.10:
+The current implementation no longer follows that path. The active plugin and
+worker are GHC 9.10.x only:
 
 ```text
 th-cross-plugin:
-  ghc >= 9.8 && < 9.11
+  ghc >= 9.10 && < 9.11
 ```
 
-Therefore the available plain nixpkgs target-side `ghc948` path is not directly
-usable by the current plugin code, but it is a valid candidate for testing the
-cross side of the textual protocol. To use it, the consumer-side plugin needs a
-GHC 9.4.8 compatibility path while the host worker can remain on GHC 9.8.4.
+The available plain nixpkgs target-side `ghc948` path is therefore no longer a
+candidate for the active raw protocol. It remains relevant only for reading the
+legacy textual experiment.
 
 ## Current Repository Probe
 
