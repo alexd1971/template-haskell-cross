@@ -64,3 +64,14 @@ executable validate-cabal-component-context
       Cabal,
       directory,
       filepath
+
+executable dump-th-cross-unit-id-map-options
+  import: warnings
+  main-is:
+      Main.hs
+  hs-source-dirs:
+      app/dump-th-cross-unit-id-map-options
+  default-language: Haskell2010
+  build-depends:
+      base,
+      process

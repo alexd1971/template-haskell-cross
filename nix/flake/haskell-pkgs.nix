@@ -42,8 +42,8 @@ let
           haskellLib = pkgs.haskell.lib;
           hostGhc = selfH.ghc;
         };
-      th-consumer-example =
-        selfH.callPackage ../generated/th-consumer-example.nix { };
+      th-target-context-consumer =
+        selfH.callPackage ../generated/th-target-context-consumer.nix { };
     };
   };
 

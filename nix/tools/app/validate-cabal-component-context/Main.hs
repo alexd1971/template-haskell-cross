@@ -1,3 +1,9 @@
+-- | Validate Nix-derived host package names against Cabal's configured
+-- component dependency graph.
+--
+-- This catches cases where the worker package DB assembled at Nix evaluation
+-- time no longer matches the dependencies Cabal actually selected during
+-- `Setup configure`.
 import Control.Monad (unless)
 import Data.List (intercalate, nub, sort)
 import Distribution.Simple.Configure (getPersistBuildConfig)

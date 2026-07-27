@@ -9,5 +9,5 @@ cradle:
     - path: "th-host-worker/app"
       component: "th-host-worker:exe:th-host-worker"
 
-    - path: "th-consumer-example/src"
-      component: "lib:th-consumer-example"
+    - path: "th-target-context-consumer/src"
+      component: "lib:th-target-context-consumer"

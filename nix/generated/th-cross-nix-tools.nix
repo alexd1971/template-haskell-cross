@@ -1,4 +1,5 @@
 { mkDerivation, base, bytestring, Cabal, directory, filepath, lib
+, process
 }:
 mkDerivation {
   pname = "th-cross-nix-tools";
@@ -10,7 +11,7 @@ mkDerivation {
     base bytestring Cabal directory filepath
   ];
   executableHaskellDepends = [
-    base bytestring Cabal directory filepath
+    base bytestring Cabal directory filepath process
   ];
   doHaddock = false;
   license = lib.meta.getLicenseFromSpdxId "BSD-3-Clause";

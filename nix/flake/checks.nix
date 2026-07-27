@@ -27,7 +27,8 @@
       touch "$out"
     '';
 
-  consumer-ghc9103-package = hs.consumerGhc9103HaskellPkgs.th-consumer-example;
+  consumer-ghc9103-target-context-package =
+    hs.consumerGhc9103HaskellPkgs.th-target-context-consumer;
 
   cross-target-probe-aarch64-linux = aarch64LinuxCrossProbe;
 }

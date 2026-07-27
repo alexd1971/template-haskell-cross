@@ -165,7 +165,8 @@ Cross-compilation of packages using this GHC is demonstrated in the
 experiment packages:
 
 ```bash
-nix build .#consumer-ghc9103-cross-generic-package    # th-consumer-example
+nix build .#consumer-ghc9103-cross-target-context-package
 nix build .#consumer-ghc9103-cross-microlens-package  # with microlens-th
+nix build .#consumer-ghc9103-cross-aeson-package      # with aeson TH
 nix build .#consumer-ghc9103-cross-executable-package # executable + qemu
 ```

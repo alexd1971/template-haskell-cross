@@ -17,11 +17,14 @@
         ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-host-worker \
           > th-host-worker.nix
 
-        ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-consumer-example \
-          > th-consumer-example.nix
+        ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-target-context-consumer \
+          > th-target-context-consumer.nix
 
         ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-microlens-consumer \
           > th-microlens-consumer.nix
+
+        ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-aeson-consumer \
+          > th-aeson-consumer.nix
 
         ${pkgs.cabal2nix}/bin/cabal2nix ../../prototype/th-executable-consumer \
           > th-executable-consumer.nix

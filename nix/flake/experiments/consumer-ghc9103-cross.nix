@@ -32,6 +32,7 @@ let
       consumerPlugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
       pluginLibDir = "${consumerPlugin}/lib/ghc-9.10.3";
       nativeGhcPkg = "${pkgs.haskell.compiler.ghc9103}/bin/ghc-pkg";
+      targetGhcPkg = "${crossGhc9103Aarch64}/bin/aarch64-unknown-linux-gnu-ghc-pkg";
       defaultWorker = "${hs.hostGhc9103HaskellPkgs.th-host-worker}/bin/th-host-worker";
 
       componentDependencyFields = [
@@ -84,7 +85,7 @@ let
           in
           {
             worker = "${pkgs.runCommand
-              "th-host-worker-ghc984-with-host-packages"
+              "th-host-worker-ghc9103-with-host-packages"
             {
               nativeBuildInputs = [
                 pkgs.makeWrapper
@@ -175,6 +176,43 @@ EOF
           done < th-cross-cabal-cpp-options
         '';
 
+      appendHostPackageIdsToPluginOptions =
+        hostGhcPkg:
+        hostPackageNames:
+        pkgs.lib.concatMapStringsSep "\n" (packageName: ''
+          host_package_id="$("${hostGhcPkg}" field ${pkgs.lib.escapeShellArg packageName} id --simple-output)"
+          plugin_options="$plugin_options,\"host-package-id=$host_package_id\""
+        '') hostPackageNames;
+
+      appendUnitIdMapOptions =
+        hostGhcPkg:
+        ''
+          ${hs.nixTools}/bin/dump-th-cross-unit-id-map-options \
+            "${hostGhcPkg}" \
+            "${targetGhcPkg}" \
+            "$packageConfDir" \
+            > th-cross-unit-id-map-options
+
+          while IFS= read -r plugin_option; do
+            if [ -n "$plugin_option" ]; then
+              plugin_options="$plugin_options,\"$plugin_option\""
+            fi
+          done < th-cross-unit-id-map-options
+        '';
+
+      finalizePluginOptions =
+        ''
+          plugin_options="$plugin_options]"
+        '';
+
+      appendCrossPluginFlags =
+        ''
+          appendToVar configureFlags "--ghc-option=-v0"
+          appendToVar configureFlags "--ghc-option=-fno-external-interpreter"
+          appendToVar configureFlags "--ghc-option=-fforce-recomp"
+          appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;$plugin_options"
+        '';
+
       mkConsumerDerivationWithWorker =
         hostPackageNames:
         args:
@@ -196,24 +234,22 @@ EOF
                 inherit pluginLibDir nativeGhcPkg;
                 consumerGhcVersion = "9.10.3";
               }}
+
               # The external plugin is loaded into the cross-GHC process by the
               # host dynamic linker, so its transitive Haskell shared libraries must
               # be discoverable at plugin load time.
               export LD_LIBRARY_PATH="$plugin_library_path''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+              # Build the JSON-like option list passed as the fourth
+              # `-fplugin-library` field. Each block appends one category of
+              # cross/host context required by the plugin and worker.
               plugin_options="[\"worker=${workerContext.worker}\""
-              ${pkgs.lib.concatMapStringsSep "\n" (packageName: ''
-                host_package_id="$("${workerContext.hostGhcPkg}" field ${pkgs.lib.escapeShellArg packageName} id --simple-output)"
-                plugin_options="$plugin_options,\"host-package-id=$host_package_id\""
-              '') externalHostPackageNames}
+              ${appendHostPackageIdsToPluginOptions workerContext.hostGhcPkg externalHostPackageNames}
+              ${appendUnitIdMapOptions workerContext.hostGhcPkg}
               ${appendCabalSourceDirsToPluginOptions}
               ${appendCabalCppOptionsToPluginOptions}
-              plugin_options="$plugin_options]"
-
-              appendToVar configureFlags "--ghc-option=-v0"
-              appendToVar configureFlags "--ghc-option=-fno-external-interpreter"
-              appendToVar configureFlags "--ghc-option=-fforce-recomp"
-              appendToVar configureFlags "--ghc-option=-fplugin-library=$plugin_so;$plugin_unit;THCross.Plugin;$plugin_options"
+              ${finalizePluginOptions}
+              ${appendCrossPluginFlags}
             '';
             postConfigure =
               pkgs.lib.concatStringsSep "\n" [
@@ -262,11 +298,14 @@ EOF
         };
     in
     {
-      example =
-        callPackageWithWorker ../../../nix/generated/th-consumer-example.nix;
+      targetContextConsumer =
+        callPackageWithWorker ../../../nix/generated/th-target-context-consumer.nix;
 
       microlensConsumer =
         callPackageWithWorker ../../../nix/generated/th-microlens-consumer.nix;
+
+      aesonConsumer =
+        callPackageWithWorker ../../../nix/generated/th-aeson-consumer.nix;
 
       executableConsumer =
         callPackageWithWorker ../../../nix/generated/th-executable-consumer.nix;
@@ -305,8 +344,10 @@ in
     # Patched cross-GHC with -fplugin-library support.
     cross-ghc9103-aarch64-linux =
       crossGhc9103Aarch64;
-    consumer-ghc9103-cross-generic-package = genericBuilderPackages.example;
+    consumer-ghc9103-cross-target-context-package =
+      genericBuilderPackages.targetContextConsumer;
     consumer-ghc9103-cross-microlens-package = genericBuilderPackages.microlensConsumer;
+    consumer-ghc9103-cross-aeson-package = genericBuilderPackages.aesonConsumer;
     consumer-ghc9103-cross-microlens-cabal-context-probe =
       genericBuilderPackages.microlensConsumerCabalContextProbe;
     consumer-ghc9103-cross-executable-package = genericBuilderPackages.executableConsumer;

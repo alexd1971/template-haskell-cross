@@ -17,8 +17,10 @@ import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Data.Binary (decodeOrFail)
 import qualified Data.ByteString.Lazy as LBS
+import Data.Data (Data, gmapT)
 import Data.List (stripPrefix)
 import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Typeable (cast)
 import GHC.Data.FastString (unpackFS)
 import GHC.Driver.Env.Types (HscEnv (..))
 import GHC.Driver.Hooks (Hooks (..))
@@ -66,6 +68,7 @@ import GHC.Unit.Module (moduleName, moduleNameString, moduleUnitId, unitIdString
 import GHC.Utils.Outputable (ppr, showSDocUnsafe)
 import GHCi.TH.Binary ()
 import qualified Language.Haskell.TH as TH
+import qualified Language.Haskell.TH.Syntax as TH.Syntax
 import System.IO
   ( Handle
   , hSetBuffering
@@ -184,9 +187,9 @@ workerMetaHook workerState config request spliceExpr = do
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
-        replayAddedTopDecls config sourceLoc (spliceResultAddedTopDecls spliceResult)
+        replayAddedTopDecls config (spliceComponentUnitId tcGblEnv) sourceLoc (spliceResultAddedTopDecls spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
-        convertExpressionSplice sourceLoc spliceResult
+        convertExpressionSplice config (spliceComponentUnitId tcGblEnv) sourceLoc spliceResult
 
     evaluateWorkerPatternSplice tcGblEnv =
       do
@@ -194,9 +197,9 @@ workerMetaHook workerState config request spliceExpr = do
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
-        replayAddedTopDecls config sourceLoc (spliceResultAddedTopDecls spliceResult)
+        replayAddedTopDecls config (spliceComponentUnitId tcGblEnv) sourceLoc (spliceResultAddedTopDecls spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
-        convertPatternSplice sourceLoc spliceResult
+        convertPatternSplice config (spliceComponentUnitId tcGblEnv) sourceLoc spliceResult
 
     evaluateWorkerTypeSplice tcGblEnv =
       do
@@ -204,9 +207,9 @@ workerMetaHook workerState config request spliceExpr = do
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
-        replayAddedTopDecls config sourceLoc (spliceResultAddedTopDecls spliceResult)
+        replayAddedTopDecls config (spliceComponentUnitId tcGblEnv) sourceLoc (spliceResultAddedTopDecls spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
-        convertTypeSplice sourceLoc spliceResult
+        convertTypeSplice config (spliceComponentUnitId tcGblEnv) sourceLoc spliceResult
 
     evaluateWorkerDeclarationSplice tcGblEnv =
       do
@@ -215,7 +218,7 @@ workerMetaHook workerState config request spliceExpr = do
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
-        convertDeclarationSplice sourceLoc spliceResult
+        convertDeclarationSplice config (spliceComponentUnitId tcGblEnv) sourceLoc spliceResult
 
     evaluateWorkerAnnotationWrapper tcGblEnv =
       do
@@ -223,7 +226,7 @@ workerMetaHook workerState config request spliceExpr = do
           requestWorker workerState config (spliceModuleName tcGblEnv) (spliceComponentUnitId tcGblEnv) spliceKind sourceLoc renderedSpan (spliceKey tcGblEnv) renderedSpliceExpr
         replayDependentFiles config (spliceResultDependentFiles spliceResult)
         replayForeignFiles config (spliceResultForeignFiles spliceResult)
-        replayAddedTopDecls config sourceLoc (spliceResultAddedTopDecls spliceResult)
+        replayAddedTopDecls config (spliceComponentUnitId tcGblEnv) sourceLoc (spliceResultAddedTopDecls spliceResult)
         replayDiagnostics (spliceResultDiagnostics spliceResult)
         decodeAnnotationWrapper spliceResult
 
@@ -241,66 +244,98 @@ decodeAnnotationWrapper spliceResult =
         Right (_, _, serialized) ->
           pure serialized
 
-convertExpressionSplice :: SrcSpan -> SpliceResult -> TcM (LHsExpr GhcPs)
-convertExpressionSplice sourceLoc spliceResult =
+convertExpressionSplice :: PluginConfig -> String -> SrcSpan -> SpliceResult -> TcM (LHsExpr GhcPs)
+convertExpressionSplice config componentUnitId sourceLoc spliceResult =
   case spliceResultExpression spliceResult of
     Nothing ->
       fail "TH host worker did not return an expression payload"
     Just thExp ->
-      case convertToHsExpr generatedOrigin sourceLoc thExp of
+      case convertToHsExpr generatedOrigin sourceLoc (rewriteTHUnitIds (effectiveUnitIdMap config componentUnitId) thExp) of
         Left _err ->
           fail "TH host worker returned an expression payload that GHC could not convert"
         Right hsExp ->
           pure hsExp
 
-convertPatternSplice :: SrcSpan -> SpliceResult -> TcM (LPat GhcPs)
-convertPatternSplice sourceLoc spliceResult =
+convertPatternSplice :: PluginConfig -> String -> SrcSpan -> SpliceResult -> TcM (LPat GhcPs)
+convertPatternSplice config componentUnitId sourceLoc spliceResult =
   case spliceResultPattern spliceResult of
     Nothing ->
       fail "TH host worker did not return a pattern payload"
     Just thPat ->
-      case convertToPat generatedOrigin sourceLoc thPat of
+      case convertToPat generatedOrigin sourceLoc (rewriteTHUnitIds (effectiveUnitIdMap config componentUnitId) thPat) of
         Left _err ->
           fail "TH host worker returned a pattern payload that GHC could not convert"
         Right hsPat ->
           pure hsPat
 
-convertTypeSplice :: SrcSpan -> SpliceResult -> TcM (LHsType GhcPs)
-convertTypeSplice sourceLoc spliceResult =
+convertTypeSplice :: PluginConfig -> String -> SrcSpan -> SpliceResult -> TcM (LHsType GhcPs)
+convertTypeSplice config componentUnitId sourceLoc spliceResult =
   case spliceResultType spliceResult of
     Nothing ->
       fail "TH host worker did not return a type payload"
     Just thType ->
-      case convertToHsType generatedOrigin sourceLoc thType of
+      case convertToHsType generatedOrigin sourceLoc (rewriteTHUnitIds (effectiveUnitIdMap config componentUnitId) thType) of
         Left _err ->
           fail "TH host worker returned a type payload that GHC could not convert"
         Right hsType ->
           pure hsType
 
-convertDeclarationSplice :: SrcSpan -> SpliceResult -> TcM [LHsDecl GhcPs]
-convertDeclarationSplice sourceLoc spliceResult = do
-  addedDecls <- convertAddedTopDecls sourceLoc (spliceResultAddedTopDecls spliceResult)
+convertDeclarationSplice :: PluginConfig -> String -> SrcSpan -> SpliceResult -> TcM [LHsDecl GhcPs]
+convertDeclarationSplice config componentUnitId sourceLoc spliceResult = do
+  addedDecls <- convertAddedTopDecls config componentUnitId sourceLoc (spliceResultAddedTopDecls spliceResult)
   generatedDecls <-
     case spliceResultDeclarations spliceResult of
       Nothing ->
         fail "TH host worker did not return a declaration payload"
       Just thDecls ->
-        case convertToHsDecls generatedOrigin sourceLoc thDecls of
+        case convertToHsDecls generatedOrigin sourceLoc (rewriteTHUnitIds (effectiveUnitIdMap config componentUnitId) thDecls) of
           Left _err ->
             fail "TH host worker returned a declaration payload that GHC could not convert"
           Right hsDecls ->
             pure hsDecls
   pure (addedDecls <> generatedDecls)
 
-convertAddedTopDecls :: SrcSpan -> [TH.Dec] -> TcM [LHsDecl GhcPs]
-convertAddedTopDecls sourceLoc addedTopDecls
+convertAddedTopDecls :: PluginConfig -> String -> SrcSpan -> [TH.Dec] -> TcM [LHsDecl GhcPs]
+convertAddedTopDecls config componentUnitId sourceLoc addedTopDecls
   | null addedTopDecls = pure []
   | otherwise =
-      case convertToHsDecls generatedOrigin sourceLoc addedTopDecls of
+      case convertToHsDecls generatedOrigin sourceLoc (rewriteTHUnitIds (effectiveUnitIdMap config componentUnitId) addedTopDecls) of
         Left _err ->
           fail "TH host worker returned addTopDecls payload that GHC could not convert"
         Right hsDecls ->
           pure hsDecls
+
+effectiveUnitIdMap :: PluginConfig -> String -> [(String, String)]
+effectiveUnitIdMap config componentUnitId =
+  ("main", componentUnitId) : pluginUnitIdMap config
+
+rewriteTHUnitIds :: Data a => [(String, String)] -> a -> a
+rewriteTHUnitIds unitIdMap =
+  rewrite
+  where
+    rewrite :: Data b => b -> b
+    rewrite value =
+      case cast value :: Maybe TH.Name of
+        Just name ->
+          case cast (rewriteName name) of
+            Just rewritten ->
+              rewritten
+            Nothing ->
+              value
+        Nothing ->
+          gmapT rewrite value
+
+    rewriteName (TH.Syntax.Name occ (TH.Syntax.NameG namespace packageName moduleName)) =
+      TH.Syntax.Name occ (TH.Syntax.NameG namespace (rewritePackageName packageName) moduleName)
+    rewriteName name =
+      name
+
+    rewritePackageName packageName@(TH.Syntax.PkgName packageNameText) =
+      case lookup packageNameText unitIdMap of
+        Just targetUnitId ->
+          TH.Syntax.PkgName targetUnitId
+        Nothing ->
+          packageName
 
 generatedOrigin :: Origin
 generatedOrigin =
@@ -310,6 +345,7 @@ generatedOrigin =
 data PluginConfig = PluginConfig
   { pluginWorkerPath :: !FilePath
   , pluginHostPackageIds :: ![String]
+  , pluginUnitIdMap :: ![(String, String)]
   , pluginHostSourceDirs :: ![FilePath]
   , pluginHostGhcOptions :: ![String]
   , pluginDebug :: !Bool
@@ -333,6 +369,7 @@ data WorkerHandle = WorkerHandle
 -- @
 -- -fplugin-opt=THCross.Plugin:worker=/path/to/th-host-worker
 -- -fplugin-opt=THCross.Plugin:host-package-id=unit-id
+-- -fplugin-opt=THCross.Plugin:unit-id-map=host-unit-id=target-unit-id
 -- -fplugin-opt=THCross.Plugin:host-source-dir=src
 -- -fplugin-opt=THCross.Plugin:host-ghc-option=-DNAME
 -- -fplugin-opt=THCross.Plugin:debug
@@ -344,12 +381,19 @@ data WorkerHandle = WorkerHandle
 parsePluginConfig :: [CommandLineOption] -> IO PluginConfig
 parsePluginConfig opts = do
   rejectRemovedWireFormatOption opts
+  unitIdMap <-
+    case findUnitIdMap opts of
+      Left err ->
+        ioError (userError err)
+      Right mappings ->
+        pure mappings
   case findWorkerPath opts of
     Just workerPath ->
       pure
         PluginConfig
           { pluginWorkerPath = workerPath
           , pluginHostPackageIds = findHostPackageIds opts
+          , pluginUnitIdMap = unitIdMap
           , pluginHostSourceDirs = findHostSourceDirs opts
           , pluginHostGhcOptions = findHostGhcOptions opts
           , pluginDebug = "debug" `elem` opts
@@ -378,6 +422,19 @@ findWorkerPath = listToMaybe . mapMaybe (stripPrefix "worker=")
 findHostPackageIds :: [CommandLineOption] -> [String]
 findHostPackageIds =
   mapMaybe (stripPrefix "host-package-id=")
+
+-- | Extract host-to-target unit id remappings for raw TH exact names.
+findUnitIdMap :: [CommandLineOption] -> Either String [(String, String)]
+findUnitIdMap opts =
+  traverse parseMapping (mapMaybe (stripPrefix "unit-id-map=") opts)
+  where
+    parseMapping text =
+      case break (== '=') text of
+        (hostUnitId, '=' : targetUnitId)
+          | not (null hostUnitId) && not (null targetUnitId) ->
+              Right (hostUnitId, targetUnitId)
+        _ ->
+          Left ("invalid unit-id-map option: " <> text)
 
 -- | Extract extra source directories visible to the host-side GHC session.
 findHostSourceDirs :: [CommandLineOption] -> [FilePath]
@@ -514,11 +571,11 @@ replayForeignFiles config foreignFiles = do
         foreignFiles
 
 -- | Replay host-side @addTopDecls@ effects in the cross GHC session.
-replayAddedTopDecls :: PluginConfig -> SrcSpan -> [TH.Dec] -> TcM ()
-replayAddedTopDecls config sourceLoc addedTopDecls
+replayAddedTopDecls :: PluginConfig -> String -> SrcSpan -> [TH.Dec] -> TcM ()
+replayAddedTopDecls config componentUnitId sourceLoc addedTopDecls
   | null addedTopDecls = pure ()
   | otherwise = do
-      parsedDecls <- convertAddedTopDecls sourceLoc addedTopDecls
+      parsedDecls <- convertAddedTopDecls config componentUnitId sourceLoc addedTopDecls
       recordAddedTopDecls parsedDecls
       whenDebug config ("th-cross: added top decls " <> show (length parsedDecls))
 

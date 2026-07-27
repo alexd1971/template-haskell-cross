@@ -43,17 +43,18 @@ be introduced later as a separate target package set.
 ```text
 packages.${system}.host-ghc9103-worker
 packages.${system}.cross-ghc9103-aarch64-linux
-packages.${system}.consumer-ghc9103-cross-generic-package
+packages.${system}.consumer-ghc9103-cross-target-context-package
 packages.${system}.consumer-ghc9103-cross-microlens-package
 packages.${system}.consumer-ghc9103-cross-microlens-cabal-context-probe
+packages.${system}.consumer-ghc9103-cross-aeson-package
 packages.${system}.consumer-ghc9103-cross-executable-package
 packages.${system}.consumer-ghc9103-cross-executable-qemu-smoke
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
-packages.${system}.consumer-ghc9103-package
+packages.${system}.consumer-ghc9103-target-context-package
 packages.${system}.aarch64-linux-cross-probe
 checks.${system}.consumer-ghc9103-worker-smoke
-checks.${system}.consumer-ghc9103-package
+checks.${system}.consumer-ghc9103-target-context-package
 checks.${system}.cross-target-probe-aarch64-linux
 devShells.${system}.default
 apps.${system}.regen-cabal-nix
@@ -69,8 +70,8 @@ host architecture:
 - `cross-ghc9103-aarch64-linux` — рабочий кросс-GHC 9.10.3 для
   `aarch64-linux` с тремя патчами (см. `docs/ghc-cross-patches.md`),
   поддерживающий загрузку плагина через `-fplugin-library`;
-- `consumer-ghc9103-cross-generic-package` builds the same checked-in
-  `th-consumer-example` package through nixpkgs' Haskell generic builder. It
+- `consumer-ghc9103-cross-target-context-package` builds the checked-in
+  `th-target-context-consumer` package through nixpkgs' Haskell generic builder. It
   constructs a target Haskell package set around the patched aarch64 cross-GHC,
   uses native GHC 9.10.3 for `Setup.hs`, reads native plugin metadata with
   `ghc-pkg`, passes `-fplugin-library` in `preConfigure`, and lets the generic
@@ -82,6 +83,10 @@ host architecture:
   `microlens-th` generator package and runs a declaration splice
   `makeLenses ''User` through the host worker while cross-compiling
   the package with the patched aarch64 GHC 9.10.3;
+- `consumer-ghc9103-cross-aeson-package` builds `th-aeson-consumer`, a package
+  that depends on the real `aeson` TH generator and runs a declaration splice
+  `foldMap (deriveJSON defaultOptions) [...]` through the host worker while
+  cross-compiling the package with the patched aarch64 GHC 9.10.3;
 - `consumer-ghc9103-cross-executable-package` builds
   `th-executable-consumer`, a package with a library component and an
   executable component. The executable imports a TH generator from its own
@@ -98,7 +103,7 @@ host architecture:
 - `checks.${system}.consumer-ghc9103-worker-smoke` compiles `Example.hs` with
   `consumer-ghc9103-ghc` and passes the Nix-built patched GHC 9.10.3 worker to the
   plugin.
-- `consumer-ghc9103-package` is a minimal Cabal package from
+- `consumer-ghc9103-target-context-package` is a minimal Cabal package from
   `consumerGhc9103HaskellPkgs` compiled natively with the standard GHC TH
   evaluator. Package-level plugin/worker wiring is covered by the cross package
   derivations below, where it is actually needed.
@@ -147,6 +152,14 @@ The plugin serializes these unit ids into the binary-framed splice request as
 before loading the source module. `TH_HOST_GHC_PACKAGE_IDS` is accepted as an
 environment-variable fallback for manual experiments, but the preferred
 prototype path is exact unit-id data from the cross-side plugin.
+
+Raw TH payloads can also contain exact `NameG` references to package ids that
+are not directly loadable in the target package DB. They may be host installed
+unit ids, or source package ids such as `microlens-0.4.14.0`. Neither form is a
+safe cross-side lookup key. The Nix experiment therefore also derives
+`unit-id-map=from-id=target-unit-id` plugin options by matching package names in
+the host and target package DBs. The cross-side plugin rewrites exact TH names
+through that map before calling `GHC.ThToHs.convertToHs...`.
 
 This uses nixpkgs' own evaluation-time Haskell dependency metadata instead of
 parsing the `.cabal` file directly. It still assumes that each extracted package
@@ -290,13 +303,13 @@ nix build .#consumer-ghc9103-ghc
 Build the package-level consumer example:
 
 ```bash
-nix build .#consumer-ghc9103-package
+nix build .#consumer-ghc9103-target-context-package
 ```
 
 Run the package through nixpkgs' Haskell generic builder:
 
 ```bash
-nix build .#consumer-ghc9103-cross-generic-package -L --allow-import-from-derivation
+nix build .#consumer-ghc9103-cross-target-context-package -L
 find -L result -maxdepth 7 \( -type f -o -type l \) | sort
 ```
 
@@ -314,6 +327,13 @@ nix build .#consumer-ghc9103-cross-microlens-package -L --allow-import-from-deri
 find -L result -maxdepth 8 \( -name 'Example*.hi' -o -name 'Example*.dyn_hi' -o -name '*.conf' \) -print
 ```
 
+Run the `aeson` TH smoke:
+
+```bash
+nix build .#consumer-ghc9103-cross-aeson-package -L --allow-import-from-derivation
+find -L result -maxdepth 8 \( -name 'Example*.hi' -o -name 'Example*.dyn_hi' -o -name '*.conf' \) -print
+```
+
 Observed result: the package installs aarch64 target artifacts for
 `th-microlens-consumer`, including `Example.hi`, `Example.dyn_hi`, and a package
 conf. During the build, the cross-GHC intercepts the declaration splice:
@@ -322,7 +342,7 @@ conf. During the build, the cross-GHC intercepts the declaration splice:
 module: Example
 kind: declaration
 expression: makeLenses ''User
-worker: /nix/store/...-th-host-worker-ghc984-with-host-packages/bin/th-host-worker
+worker: /nix/store/...-th-host-worker-ghc9103-with-host-packages/bin/th-host-worker
 th-host-worker: cache miss src/Example.hs
 ```
 
@@ -332,8 +352,8 @@ This confirms a stronger case than the local toy package:
 - the worker loads the source module with a host-side package DB containing
   `microlens` and `microlens-th`;
 - the host worker evaluates a declaration splice that uses `reify`;
-- the generated declarations are returned as text, parsed by the cross-GHC, and
-  renamed/typechecked in the target module;
+- the generated declarations are returned as raw TH declarations, converted by
+  the cross-GHC, and renamed/typechecked in the target module;
 - the target package is built and installed as an aarch64 package.
 
 Run the executable-component dependency smoke:
@@ -376,7 +396,7 @@ the plugin option list as:
 host-ghc-option=<cpp option>
 ```
 
-The `th-consumer-example` package uses this for a CPP-sensitive splice:
+The `th-target-context-consumer` package uses this for a CPP-sensitive splice:
 `Example` defines either `TargetPlatform` or `HostPlatform`, and the splice
 reifies `Platform` through the host worker. The package-level cross build only
 passes because Cabal's `cpp-options: -DTH_CONSUMER_TARGET_CONTEXT` is forwarded
@@ -406,11 +426,12 @@ Current blocker: host-side dependency context derivation is validated against
 Cabal `setup-config`, but package selection is still not a complete Cabal
 component-context model. The Nix experiment reads nixpkgs Haskell derivation
 `passthru.getCabalDeps`, extracts dependency `pname`s, builds a matching GHC
-9.8.4 host package DB, resolves exact host unit ids with host `ghc-pkg`, and
-passes matching `host-package-id` plugin options automatically. A production
-integration still needs a model for renamed packages, internal libraries beyond
-the current package, setup dependencies, and packages whose host package-set
-attribute is not the same as the Cabal package name.
+9.10.3 host package DB, resolves exact host unit ids with host `ghc-pkg`, and
+passes matching `host-package-id` and `unit-id-map` plugin options
+automatically. A production integration still needs a model for renamed
+packages, internal libraries beyond the current package, setup dependencies, and
+packages whose host package-set attribute is not the same as the Cabal package
+name.
 
 Inspect the plain nixpkgs aarch64-linux cross probe:
 
@@ -461,7 +482,7 @@ package-level plugin path is covered by the cross Cabal/generic package builds
 below.
 
 The cross Cabal package derivation is the first package-shaped aarch64 build
-path in this flake. It copies `prototype/th-consumer-example`, creates a
+path in this flake. It copies `prototype/th-target-context-consumer`, creates a
 standard `Setup.hs`, runs `Setup configure` with the patched aarch64 cross-GHC,
 then runs `Setup build` and `Setup copy`. The package output is installed under
 `$out`; the diagnostic log is written to `$out/nix-support/build-log`.
@@ -469,9 +490,9 @@ then runs `Setup build` and `Setup copy`. The package output is installed under
 Observed native package output:
 
 ```text
-th-consumer-example> Building library for th-consumer-example-0.1.0.0...
-th-consumer-example> [1 of 2] Compiling Gen
-th-consumer-example> [2 of 2] Compiling Example
+th-target-context-consumer> Building library for th-target-context-consumer-0.1.0.0...
+th-target-context-consumer> [1 of 2] Compiling Gen
+th-target-context-consumer> [2 of 2] Compiling Example
 ```
 
 This native package build intentionally uses the standard GHC TH evaluator. The
@@ -482,11 +503,11 @@ splice a second time only for `*.p_o` output.
 Observed cross Cabal package output:
 
 ```text
-cabal package: th-consumer-example
+cabal package: th-target-context-consumer
 configure/build/copy with Setup.hs and cross-GHC:
-Configuring th-consumer-example-0.1.0.0...
-Preprocessing library for th-consumer-example-0.1.0.0...
-Building library for th-consumer-example-0.1.0.0...
+Configuring th-target-context-consumer-0.1.0.0...
+Preprocessing library for th-target-context-consumer-0.1.0.0...
+Building library for th-target-context-consumer-0.1.0.0...
 th-cross: intercepted Template Haskell splice
 module: Example
 kind: expression
@@ -495,14 +516,14 @@ expression: (gen)
 worker: /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
 th-cross: started worker /nix/store/...-th-host-worker-0.1.0.0/bin/th-host-worker
 th-host-worker: cache miss src/Example.hs
-Installing library in /nix/store/...-th-consumer-example-aarch64-unknown-linux-gnu-0.1.0.0/lib
+Installing library in /nix/store/...-th-target-context-consumer-aarch64-unknown-linux-gnu-0.1.0.0/lib
 
 status=ok
 ```
 
 This confirms:
 
-- Cabal reads the `th-consumer-example.cabal` package description;
+- Cabal reads the `th-target-context-consumer.cabal` package description;
 - Cabal configures the library component with the patched aarch64 cross-GHC;
 - the cross-GHC loads `THCross.Plugin` through `-fplugin-library`;
 - the plugin delegates TH execution to the patched native GHC 9.10.3 worker;
@@ -626,7 +647,7 @@ cabal \
 ## Next Step
 
 The current local proof includes a successful Setup-based Cabal package
-derivation for `th-consumer-example` with the patched aarch64 GHC 9.10.3 cross
+derivation for `th-target-context-consumer` with the patched aarch64 GHC 9.10.3 cross
 compiler. The next Nix integration step should move from this hand-written
 Setup-based derivation toward normal package-set integration:
 

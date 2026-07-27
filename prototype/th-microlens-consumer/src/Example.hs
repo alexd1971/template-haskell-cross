@@ -2,7 +2,7 @@
 
 module Example where
 
-import Lens.Micro (Lens', (^.))
+import Lens.Micro ((^.))
 import Lens.Micro.TH (makeLenses)
 
 data User = User

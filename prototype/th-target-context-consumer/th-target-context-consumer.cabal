@@ -1,5 +1,5 @@
 cabal-version: 3.0
-name: th-consumer-example
+name: th-target-context-consumer
 version: 0.1.0.0
 license: BSD-3-Clause
 build-type: Simple

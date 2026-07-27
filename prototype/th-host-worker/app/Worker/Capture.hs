@@ -28,15 +28,11 @@ import GHC.Driver.Env.Types (HscEnv (..))
 import GHC.Driver.Hooks (Hooks (..))
 import GHC.Driver.Session
   ( GeneralFlag (Opt_ForceRecomp)
-  , ModRenaming (ModRenaming)
-  , PackageArg (UnitIdArg)
-  , PackageFlag (ExposePackage)
   , flagsAll
   , gopt_set
   , hiDir
   , importPaths
   , objectDir
-  , packageFlags
   , parseDynamicFlagsFull
   , stubDir
   )
@@ -53,7 +49,6 @@ import GHC.Types.SrcLoc
   ( noLoc
   , unLoc
   )
-import GHC.Unit.Types (stringToUnit)
 import THCross.Protocol
   ( SpliceForeignFile
   , SpliceKind (..)
@@ -98,8 +93,8 @@ captureModuleSplices request = do
       parseDynamicFlagsFull
         flagsAll
         True
-        (workerDynFlags extraPackageIds dflags)
-        (map noLoc (requestHostGhcOptions request))
+        (workerDynFlags dflags)
+        (map noLoc (hostPackageIdArgs extraPackageIds <> requestHostGhcOptions request))
     case remainingArgs of
       [] ->
         setSessionDynFlags dflagsWithHostOptions
@@ -124,16 +119,16 @@ captureModuleSplices request = do
         [] -> [sourceDir]
         hostSourceDirs -> hostSourceDirs
 
-    workerDynFlags extraPackageIds dflags =
+    workerDynFlags dflags =
       (gopt_set dflags Opt_ForceRecomp)
         { importPaths = workerImportPaths <> importPaths dflags
         , objectDir = Just hostWorkerBuildDir
         , hiDir = Just hostWorkerBuildDir
         , stubDir = Just hostWorkerBuildDir
-        , packageFlags =
-            map exposeHostPackageId extraPackageIds
-              <> packageFlags dflags
         }
+
+    hostPackageIdArgs =
+      concatMap (\unitId -> ["-package-id", unitId])
 
     loadRequestedModule = do
       target <- guessTarget (requestSourceFile request) Nothing Nothing
@@ -169,14 +164,6 @@ getHostGhcPackageIds :: SpliceRequest -> IO [String]
 getHostGhcPackageIds request = do
   explicitPackageIds <- lookupEnv "TH_HOST_GHC_PACKAGE_IDS"
   pure (requestHostPackageIds request <> maybe [] words explicitPackageIds)
-
--- | Convert a unit id into the DynFlags representation of @-package-id unit@.
-exposeHostPackageId :: String -> PackageFlag
-exposeHostPackageId unitId =
-  ExposePackage
-    ("-package-id " <> unitId)
-    (UnitIdArg (stringToUnit unitId))
-    (ModRenaming True [])
 
 -- | Install a host-only hook that delegates to the previous hook/default GHC
 -- evaluator, records the generated splice, and returns it unchanged.

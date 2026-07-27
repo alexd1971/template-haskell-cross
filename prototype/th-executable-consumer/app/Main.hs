@@ -3,7 +3,7 @@
 module Main where
 
 import ExecutableConsumer.Gen (makeUserLenses)
-import Lens.Micro (Lens', (^.))
+import Lens.Micro ((^.))
 
 data User = User
   { _userName :: String

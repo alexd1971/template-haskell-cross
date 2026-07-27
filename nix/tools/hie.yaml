@@ -6,3 +6,5 @@ cradle:
       component: "exe:dump-cabal-cpp-options"
     - path: "app/validate-cabal-component-context"
       component: "exe:validate-cabal-component-context"
+    - path: "app/dump-th-cross-unit-id-map-options"
+      component: "exe:dump-th-cross-unit-id-map-options"
