@@ -59,8 +59,8 @@ handleFrame cache = do
 
 -- | Evaluate one splice request.
 --
--- Splice-kind-specific behavior lives in "Worker.Evaluate", where the host GHC
--- runMetaHook can return the correctly shaped raw TH payload.
+-- Splice-kind-specific behavior lives in "Worker.Capture" and "Worker.TH",
+-- where the host GHC runMetaHook can return the correctly shaped raw TH payload.
 handleRequest :: EvaluationCache -> SpliceRequest -> IO SpliceResponse
 handleRequest cache request =
   evaluateModuleSplice cache request
