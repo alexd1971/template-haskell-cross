@@ -5,4 +5,4 @@ dist-newstyle-nix/
 *.o
 *.dyn_hi
 *.dyn_o
-consumer/*/flake.lock
+examples/*/flake.lock

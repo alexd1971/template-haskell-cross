@@ -176,11 +176,11 @@ The derivation's `passthru.crossPatchNotes` contains structured metadata about
 the cross-GHC patches P1-P3.
 
 Cross-compilation of packages using this GHC is demonstrated by the standalone
-consumer fixture flakes:
+example flakes:
 
 ```bash
-nix build --no-write-lock-file ./consumer/target-context
-nix build --no-write-lock-file ./consumer/microlens  # with microlens-th
-nix build --no-write-lock-file ./consumer/aeson      # with aeson TH
-nix build --no-write-lock-file ./consumer/executable # executable component
+nix build --no-write-lock-file ./examples/target-context
+nix build --no-write-lock-file ./examples/microlens  # with microlens-th
+nix build --no-write-lock-file ./examples/aeson      # with aeson TH
+nix build --no-write-lock-file ./examples/executable # executable component
 ```

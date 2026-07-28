@@ -49,7 +49,7 @@ let
           hostGhc = selfH.ghc;
         };
       th-target-context-consumer =
-        selfH.callPackage ../../consumer/target-context/nix/generated/th-target-context-consumer.nix { };
+        selfH.callPackage ../../examples/target-context/nix/generated/th-target-context-consumer.nix { };
     };
   };
 

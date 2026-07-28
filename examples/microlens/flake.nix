@@ -1,5 +1,5 @@
 {
-  description = "TH cross microlens consumer fixture";
+  description = "TH cross microlens example";
 
   inputs = {
     th-cross.url = "path:../..";

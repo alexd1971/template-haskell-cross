@@ -8,7 +8,7 @@
     "th-cross-consumer-ghc9103-worker-smoke"
     { }
     ''
-      build_dir="$TMPDIR/consumer-build"
+      build_dir="$TMPDIR/example-build"
       mkdir -p "$build_dir"
 
       ${hs.consumerGhc9103}/bin/ghc \

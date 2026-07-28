@@ -4,7 +4,7 @@
 cross-compilation experiments.
 
 It keeps Cabal/package-db inspection out of long inline shell snippets in
-the reusable Nix helpers and consumer fixture flakes. The executable is
+the reusable Nix helpers and example flakes. The executable is
 intentionally thin; most logic lives in library modules under
 `src/ThCross/NixTools`.
 

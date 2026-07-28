@@ -134,7 +134,7 @@ regenerate the package expression with:
 cabal2nix . > nix/generated/cross-app.nix
 ```
 
-The local consumer fixtures mirror this external shape. Each `consumer/*`
+The local examples mirror this external shape. Each `examples/*`
 directory contains its own `flake.nix` with:
 
 ```nix
@@ -146,10 +146,10 @@ and builds its package through `thCross.callPackageWithWorker`.
 They can be evaluated like external flakes without writing fixture lock files:
 
 ```bash
-nix build --no-write-lock-file ./consumer/aeson
-nix build --no-write-lock-file ./consumer/microlens
-nix build --no-write-lock-file ./consumer/target-context
-nix build --no-write-lock-file ./consumer/executable
+nix build --no-write-lock-file ./examples/aeson
+nix build --no-write-lock-file ./examples/microlens
+nix build --no-write-lock-file ./examples/target-context
+nix build --no-write-lock-file ./examples/executable
 ```
 
 ## Plugin Config
@@ -239,7 +239,7 @@ th-cross-nix-tool validate-cabal-component-context \
 The standalone probe exposes the same data:
 
 ```bash
-nix build --no-write-lock-file ./consumer/microlens#cabal-context-probe -L
+nix build --no-write-lock-file ./examples/microlens#cabal-context-probe -L
 cat result/nix-support/cabal-component-deps
 ```
 
@@ -251,13 +251,13 @@ packages whose nixpkgs attribute name differs from the Cabal package name.
 
 ## Consumer Builds
 
-Build the current cross-consumer fixture packages:
+Build the current cross-compilation example packages:
 
 ```bash
-nix build --no-write-lock-file ./consumer/target-context -L
-nix build --no-write-lock-file ./consumer/microlens -L
-nix build --no-write-lock-file ./consumer/aeson -L
-nix build --no-write-lock-file ./consumer/executable -L
+nix build --no-write-lock-file ./examples/target-context -L
+nix build --no-write-lock-file ./examples/microlens -L
+nix build --no-write-lock-file ./examples/aeson -L
+nix build --no-write-lock-file ./examples/executable -L
 ```
 
 Coverage:

@@ -1,5 +1,5 @@
 {
-  description = "TH cross aeson consumer fixture";
+  description = "TH cross target-context example";
 
   inputs = {
     th-cross.url = "path:../..";
@@ -12,6 +12,6 @@
     in
     {
       packages.${system}.default =
-        thCross.callPackageWithWorker ./nix/generated/th-aeson-consumer.nix;
+        thCross.callPackageWithWorker ./nix/generated/th-target-context-consumer.nix;
     };
 }

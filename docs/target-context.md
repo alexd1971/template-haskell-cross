@@ -181,9 +181,9 @@ The current worker knows a minimal component context:
 - explicit host GHC options.
 
 It does not derive this context itself from the Cabal build plan. The Nix
-integration currently supplies these values explicitly for the consumer fixtures.
+integration currently supplies these values explicitly for the examples.
 
-That is enough for the small consumer fixtures, but not enough for real
+That is enough for the small examples, but not enough for real
 cross-package builds unless the build integration provides the right context.
 
 ## Can Host GHC Execute on Host but Preprocess Like Target?

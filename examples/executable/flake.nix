@@ -1,5 +1,5 @@
 {
-  description = "TH cross executable consumer fixture";
+  description = "TH cross executable example";
 
   inputs = {
     th-cross.url = "path:../..";
