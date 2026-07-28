@@ -22,7 +22,7 @@ let
     exec cabal \
       --store-dir "$PWD/.cabal-store-nix" \
       build \
-      --project-dir prototype \
+      --project-dir . \
       --builddir dist-newstyle-nix \
       --with-compiler ghc-9.10.3 \
       --with-hc-pkg ghc-9.10.3-pkg \
@@ -51,7 +51,7 @@ let
     exec cabal \
       --store-dir "$PWD/.cabal-store-nix" \
       test \
-      --project-dir prototype \
+      --project-dir . \
       --builddir dist-newstyle-nix \
       --with-compiler ghc-9.10.3 \
       --with-hc-pkg ghc-9.10.3-pkg \
@@ -84,7 +84,7 @@ Compilers:
   ghc-9.10.3      raw TH plugin/test compiler
 
 Helpers:
-  th-cross-build     cabal build th-cross-plugin with isolated Nix Cabal store
+  th-cross-build     cabal build th-cross-plugin and dependencies with isolated Nix Cabal store
   th-cross-test      cabal test th-cross-plugin:integration
   th-cross-test -p   run matching integration tests
 

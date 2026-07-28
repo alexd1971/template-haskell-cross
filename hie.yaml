@@ -1,0 +1,13 @@
+cradle:
+  cabal:
+    - path: "protocol/src"
+      component: "lib:th-cross-protocol"
+
+    - path: "plugin/src"
+      component: "lib:th-cross-plugin"
+
+    - path: "plugin/test"
+      component: "th-cross-plugin:test:integration"
+
+    - path: "worker/app"
+      component: "th-host-worker:exe:th-host-worker"

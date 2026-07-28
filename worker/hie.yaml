@@ -1,4 +1,7 @@
 cradle:
   cabal:
+    - path: "../protocol/src"
+      component: "lib:th-cross-protocol"
+
     - path: "app"
       component: "th-host-worker:exe:th-host-worker"

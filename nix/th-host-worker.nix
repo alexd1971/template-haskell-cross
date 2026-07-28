@@ -3,13 +3,10 @@
 , hostGhc
 , hostGhcLibDir
 , makeWrapper
-, th-cross-plugin
 }:
 
 haskellLib.overrideCabal
-  (callPackage ./generated/th-host-worker.nix {
-    inherit th-cross-plugin;
-  })
+  (callPackage ./generated/th-host-worker.nix { })
   (old: {
     buildTools = (old.buildTools or [ ]) ++ [
       makeWrapper

@@ -16,7 +16,7 @@ main :: IO ()
 main = do
   projectRoot <- findProjectRoot
   workerPath <- requireEnv "TH_HOST_WORKER" "run integration tests through nix develop and th-cross-test"
-  fixturesDir <- makeAbsolute (projectRoot </> "th-cross-plugin" </> "test" </> "fixtures")
+  fixturesDir <- makeAbsolute (projectRoot </> "plugin" </> "test" </> "fixtures")
   let testEnv =
         TestEnv
           { testProjectRoot = projectRoot

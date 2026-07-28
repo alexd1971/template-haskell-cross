@@ -26,6 +26,6 @@ executable th-host-worker
     , ghci
     , process
     , template-haskell
-    , th-cross-plugin
+    , th-cross-protocol
   ghc-options:
       -Wall

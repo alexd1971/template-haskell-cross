@@ -1,5 +1,5 @@
 {
-  description = "Template Haskell cross-compilation prototype";
+  description = "Template Haskell cross-compilation support";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

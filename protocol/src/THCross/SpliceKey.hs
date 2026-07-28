@@ -18,7 +18,8 @@ import GHC.Fingerprint (fingerprintString)
 -- treats the value as opaque so a later implementation can replace it with
 -- another digest format without changing the wire shape.
 newtype SpliceKey = SpliceKey
-  { unSpliceKey :: String
+  { -- | Render the opaque key for diagnostics and protocol logging.
+    unSpliceKey :: String
   }
   deriving (Eq, Ord, Show)
 

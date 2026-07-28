@@ -31,10 +31,10 @@ import Data.Binary
 import Data.Binary.Get (Get, getWord32be, runGetOrFail)
 import Data.Binary.Put (Put, putWord32be, runPut)
 import qualified Data.ByteString.Lazy as BL
+import Data.Word (Word32, Word8)
 import GHC.Tc.Types (ForeignSrcLang (..))
 import GHCi.TH.Binary ()
 import qualified Language.Haskell.TH.Syntax as TH
-import Data.Word (Word32, Word8)
 import System.IO (Handle, hFlush)
 import THCross.SpliceKey (SpliceKey)
 
@@ -228,7 +228,7 @@ data SpliceRequest = SpliceRequest
     requestComponentUnitId :: !String
   , -- | Source file path that the host worker should load in native GHC.
     requestSourceFile :: !FilePath
-  , -- | Splice result shape expected by the cross-side 'runMetaHook'.
+  , -- | Splice result shape expected by the cross-side @runMetaHook@.
     requestSpliceKind :: !SpliceKind
   , -- | Source span used for diagnostics and as part of the splice key payload.
     requestSourceSpan :: !SourceSpan

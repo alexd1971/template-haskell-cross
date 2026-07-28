@@ -36,6 +36,12 @@ let
   # package set.
   consumerGhc9103HaskellPkgs = pkgs.haskell.packages.ghc9103.override {
     overrides = selfH: superH: {
+      th-cross-protocol =
+        pkgs.callPackage ../th-cross-protocol.nix {
+          callPackage = selfH.callPackage;
+          haskellLib = pkgs.haskell.lib;
+          hostGhc = selfH.ghc;
+        };
       th-cross-plugin =
         pkgs.callPackage ../th-cross-plugin.nix {
           callPackage = selfH.callPackage;
@@ -52,8 +58,14 @@ let
       ghc = patchedNativeGhc9103;
       compilerConfig = ghc9103CompilerConfig;
       overrides = selfH: superH: {
-        # Private worker dependency for shared protocol modules. The public
+        # Shared protocol package used by both worker and plugin. The public
         # consumer-side plugin remains `consumerGhc9103HaskellPkgs.th-cross-plugin`.
+        th-cross-protocol =
+          pkgs.callPackage ../th-cross-protocol.nix {
+            callPackage = selfH.callPackage;
+            haskellLib = pkgs.haskell.lib;
+            hostGhc = patchedNativeGhc9103;
+          };
         th-cross-plugin =
           pkgs.callPackage ../th-cross-plugin.nix {
             callPackage = selfH.callPackage;
@@ -66,7 +78,6 @@ let
             haskellLib = pkgs.haskell.lib;
             hostGhc = patchedNativeGhc9103;
             hostGhcLibDir = "${patchedNativeGhc9103}/lib/ghc-9.10.3/lib";
-            th-cross-plugin = selfH.th-cross-plugin;
           };
       };
     };

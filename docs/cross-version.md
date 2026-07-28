@@ -49,19 +49,13 @@ Template Haskell AST binary data
 `MetaAW` annotation wrappers are tested separately below because they currently
 use a binary `GHC.Serialized.Serialized` payload.
 
-## Test Script
+## Historical Test Script
 
-The repeatable script is:
-
-```text
-prototype/cross-version-plugin-test/run.sh
-```
-
-It does the following:
+The removed legacy cross-version runner did the following:
 
 1. Builds `th-host-worker` with `ghc-9.8.4`.
 2. Builds `th-cross-plugin` with the consumer GHC.
-3. Compiles `prototype/th-cross-plugin/test/fixtures/Example.hs` with
+3. Compiles `plugin/test/fixtures/Example.hs` with
    the consumer GHC.
 4. Passes the GHC 9.8.4 worker path through
    `-fplugin-opt=THCross.Plugin:worker=...`.
@@ -73,18 +67,8 @@ foo :: Int
 foo = $([| 42 |])
 ```
 
-By default the script runs `Example.hs`. A different fixture can be selected
-with `FIXTURE`:
-
-```bash
-FIXTURE=AnnotationInt.hs prototype/cross-version-plugin-test/run.sh
-```
-
-`EXPECT_EXIT=failure` can be used for probes that are expected to fail:
-
-```bash
-FIXTURE=AnnotationInt.hs EXPECT_EXIT=failure prototype/cross-version-plugin-test/run.sh
-```
+It ran `Example.hs` by default and allowed selecting a different fixture with
+`FIXTURE`. `EXPECT_EXIT=failure` was used for probes that were expected to fail.
 
 ## GHC 9.10.x Consumer
 
@@ -97,11 +81,11 @@ th-cross: intercepted Template Haskell splice
 module: Example
 kind: expression
 splice-key: db5b38a182e7327256576d7231cf0980
-location: prototype/th-cross-plugin/test/fixtures/Example.hs:6:8-17
+location: plugin/test/fixtures/Example.hs:6:8-17
 expression: ([| 42 |])
 worker: …/th-host-worker/build/th-host-worker/th-host-worker
 th-cross: started worker …/th-host-worker/build/th-host-worker/th-host-worker
-th-host-worker: cache miss prototype/th-cross-plugin/test/fixtures/Example.hs
+th-host-worker: cache miss plugin/test/fixtures/Example.hs
 ```
 
 This confirmed that the consumer-side plugin could be loaded by a GHC 9.10.x
@@ -201,12 +185,8 @@ is also no practical reason to assume it changes on every GHC release. The
 prototype therefore treats `MetaAW` as conditionally cross-version-compatible:
 supported GHC version pairs must be covered by explicit compatibility probes.
 
-Run:
-
-```bash
-FIXTURE=AnnotationInt.hs prototype/cross-version-plugin-test/run.sh
-FIXTURE=AnnotationCustom.hs prototype/cross-version-plugin-test/run.sh
-```
+The removed legacy runner was used with `AnnotationInt.hs` and
+`AnnotationCustom.hs` fixtures.
 
 Observed `Int` annotation result:
 
@@ -215,11 +195,11 @@ th-cross: intercepted Template Haskell splice
 module: AnnotationInt
 kind: annotation-wrapper
 splice-key: de2aaf5118279fb85eb157a3d932825b
-location: …/th-cross-plugin/test/fixtures/AnnotationInt.hs:5:1-30
+location: …/plugin/test/fixtures/AnnotationInt.hs:5:1-30
 expression: toAnnotationWrapper (42 :: Int)
 worker: …/th-host-worker/build/th-host-worker/th-host-worker
 th-cross: started worker …/th-host-worker/build/th-host-worker/th-host-worker
-th-host-worker: cache miss …/th-cross-plugin/test/fixtures/AnnotationInt.hs
+th-host-worker: cache miss …/plugin/test/fixtures/AnnotationInt.hs
 host GHC: 9.8.4
 consumer GHC: 9.10.2
 fixture: AnnotationInt.hs
@@ -233,11 +213,11 @@ th-cross: intercepted Template Haskell splice
 module: AnnotationCustom
 kind: annotation-wrapper
 splice-key: 91888abb09a493c1f4c3cb9c658e1521
-location: …/th-cross-plugin/test/fixtures/AnnotationCustom.hs:7:1-38
+location: …/plugin/test/fixtures/AnnotationCustom.hs:7:1-38
 expression: toAnnotationWrapper (Ann "th-cross" 42)
 worker: …/th-host-worker/build/th-host-worker/th-host-worker
 th-cross: started worker …/th-host-worker/build/th-host-worker/th-host-worker
-th-host-worker: cache miss …/th-cross-plugin/test/fixtures/AnnotationCustom.hs
+th-host-worker: cache miss …/plugin/test/fixtures/AnnotationCustom.hs
 host GHC: 9.8.4
 consumer GHC: 9.10.2
 fixture: AnnotationCustom.hs

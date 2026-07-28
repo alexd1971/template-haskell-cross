@@ -7,8 +7,6 @@ build-type: Simple
 library
   exposed-modules:
       THCross.Plugin
-      THCross.Protocol
-      THCross.SpliceKey
   hs-source-dirs:
       src
   default-language: Haskell2010
@@ -21,6 +19,7 @@ library
     , ghci
     , process
     , template-haskell
+    , th-cross-protocol
   ghc-options:
       -Wall
 

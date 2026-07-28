@@ -79,8 +79,8 @@ Relevant source paths:
 | --- | --- | --- |
 | Dynamic compiler state | `compiler/GHC/Driver/DynFlags.hs` | `DynFlags`, `targetPlatform`, `toolSettings`, `platformMisc` |
 | Platform | `compiler/GHC/Platform.hs` | `Platform`, `platformArch`, `platformOS` |
-| TH worker | `prototype/th-host-worker/app/Worker/Evaluate.hs` | `captureModuleSplices`, `workerDynFlags` |
-| Cross TH conversion | `prototype/th-cross-plugin/src/THCross/Plugin.hs` | converts raw TH payloads with cross-side GHC |
+| TH worker | `worker/app/Worker/Evaluate.hs` | `captureModuleSplices`, `workerDynFlags` |
+| Cross TH conversion | `plugin/src/THCross/Plugin.hs` | converts raw TH payloads with cross-side GHC |
 
 `DynFlags` contains:
 

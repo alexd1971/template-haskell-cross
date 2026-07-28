@@ -17,6 +17,7 @@ host worker:
 consumer plugin:
   native GHC 9.10.3
   th-cross-plugin shared library loaded into the compiler process
+  th-cross-protocol dependency
 
 target package set:
   patched aarch64-linux cross-GHC 9.10.3
@@ -37,6 +38,7 @@ it would not create an Android or aarch64 target package set.
 ```text
 packages.${system}.patched-ghc9103
 packages.${system}.host-ghc9103-worker
+packages.${system}.consumer-ghc9103-protocol
 packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
 packages.${system}.consumer-ghc9103-target-context-package
@@ -55,6 +57,9 @@ checks.${system}.cross-target-probe-aarch64-linux
 apps.${system}.regen-cabal-nix
 devShells.${system}.default
 ```
+
+`consumer-ghc9103-protocol` contains the shared binary protocol and splice-key
+types used by both the plugin and the worker.
 
 `patched-ghc9103` is the native worker compiler. It applies
 `ghc-9.10.3-export-runth.patch`, which exports raw TH runner functions and
@@ -226,7 +231,7 @@ dist-newstyle-nix
 
 This avoids mixing Nix GHC package ids with packages built by ghcup GHCs.
 
-Build all Cabal packages in the prototype:
+Build the core Cabal workspace:
 
 ```bash
 th-cross-build

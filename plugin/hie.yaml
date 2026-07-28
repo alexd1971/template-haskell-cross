@@ -1,5 +1,8 @@
 cradle:
   cabal:
+    - path: "../protocol/src"
+      component: "lib:th-cross-protocol"
+
     - path: "src"
       component: "lib:th-cross-plugin"
 

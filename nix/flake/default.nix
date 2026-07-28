@@ -11,7 +11,7 @@ let
     nixpkgs.lib.genAttrs systems (system:
       f (import nixpkgs { inherit system; }));
 
-  testFixturesDir = ../../prototype/th-cross-plugin/test/fixtures;
+  testFixturesDir = ../../plugin/test/fixtures;
 in
 {
   packages = forAllSystems (pkgs:
@@ -35,6 +35,7 @@ in
     {
       patched-ghc9103 = hs.patchedNativeGhc9103;
       host-ghc9103-worker = hs.hostGhc9103HaskellPkgs.th-host-worker;
+      consumer-ghc9103-protocol = hs.consumerGhc9103HaskellPkgs.th-cross-protocol;
       consumer-ghc9103-plugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
       consumer-ghc9103-ghc = hs.consumerGhc9103;
       consumer-ghc9103-target-context-package = hs.consumerGhc9103HaskellPkgs.th-target-context-consumer;
