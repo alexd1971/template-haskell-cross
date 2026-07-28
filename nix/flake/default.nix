@@ -19,17 +19,8 @@ in
       # `hs` contains the host-side and consumer-side Haskell package sets.
       hs = import ./haskell-pkgs.nix { inherit pkgs; };
 
-      # Each file under `experiments/` owns one investigation branch. Adding a
-      # new experiment should usually mean adding one file there and merging
-      # its exported `packages` here.
-      aarch64LinuxCrossProbe = import ./experiments/aarch64-linux-cross-probe.nix {
-        inherit pkgs;
-      };
       crossGhc9103Aarch64 = import ./cross-ghc/ghc9103-aarch64.nix {
         inherit pkgs;
-      };
-      consumerGhc9103Cross = import ./experiments/consumer-ghc9103-cross.nix {
-        inherit pkgs hs crossGhc9103Aarch64;
       };
     in
     {
@@ -38,14 +29,11 @@ in
       consumer-ghc9103-protocol = hs.consumerGhc9103HaskellPkgs.th-cross-protocol;
       consumer-ghc9103-plugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
       consumer-ghc9103-ghc = hs.consumerGhc9103;
+      cross-ghc9103-aarch64-linux = crossGhc9103Aarch64;
       consumer-ghc9103-target-context-package = hs.consumerGhc9103HaskellPkgs.th-target-context-consumer;
       th-cross-nix-tools = hs.nixTools;
-      aarch64-linux-cross-probe = aarch64LinuxCrossProbe;
       default = hs.hostGhc9103HaskellPkgs.th-host-worker;
-    }
-    # Experiment packages are merged after the base packages so their public
-    # attribute names stay local to the experiment module.
-    // consumerGhc9103Cross.packages);
+    });
 
   apps = forAllSystems (pkgs:
     import ./apps.nix { inherit pkgs; });
@@ -54,12 +42,20 @@ in
     let
       hs = import ./haskell-pkgs.nix { inherit pkgs; };
       packages = self.packages.${pkgs.stdenv.hostPlatform.system};
-      aarch64LinuxCrossProbe = import ./experiments/aarch64-linux-cross-probe.nix {
+    in
+    import ./checks.nix {
+      inherit pkgs hs packages testFixturesDir;
+    });
+
+  lib = forAllSystems (pkgs:
+    let
+      hs = import ./haskell-pkgs.nix { inherit pkgs; };
+      crossGhc9103Aarch64 = import ./cross-ghc/ghc9103-aarch64.nix {
         inherit pkgs;
       };
     in
-    import ./checks.nix {
-      inherit pkgs hs packages testFixturesDir aarch64LinuxCrossProbe;
+    import ./th-cross-lib.nix {
+      inherit pkgs hs crossGhc9103Aarch64;
     });
 
   devShells = forAllSystems (pkgs:

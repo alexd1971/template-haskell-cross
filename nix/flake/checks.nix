@@ -1,4 +1,4 @@
-{ pkgs, hs, packages, testFixturesDir, aarch64LinuxCrossProbe }:
+{ pkgs, hs, packages, testFixturesDir }:
 
 # Fast flake checks that exercise the already-supported native/plugin-worker
 # combinations. Heavy cross-GHC builds are exposed as packages/experiments
@@ -29,6 +29,4 @@
 
   consumer-ghc9103-target-context-package =
     hs.consumerGhc9103HaskellPkgs.th-target-context-consumer;
-
-  cross-target-probe-aarch64-linux = aarch64LinuxCrossProbe;
 }

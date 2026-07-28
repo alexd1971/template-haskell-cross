@@ -21,16 +21,16 @@
           > th-host-worker.nix
 
         ${pkgs.cabal2nix}/bin/cabal2nix ../../consumer/target-context \
-          > th-target-context-consumer.nix
+          > ../../consumer/target-context/nix/generated/th-target-context-consumer.nix
 
         ${pkgs.cabal2nix}/bin/cabal2nix ../../consumer/microlens \
-          > th-microlens-consumer.nix
+          > ../../consumer/microlens/nix/generated/th-microlens-consumer.nix
 
         ${pkgs.cabal2nix}/bin/cabal2nix ../../consumer/aeson \
-          > th-aeson-consumer.nix
+          > ../../consumer/aeson/nix/generated/th-aeson-consumer.nix
 
         ${pkgs.cabal2nix}/bin/cabal2nix ../../consumer/executable \
-          > th-executable-consumer.nix
+          > ../../consumer/executable/nix/generated/th-executable-consumer.nix
 
         ${pkgs.cabal2nix}/bin/cabal2nix ../../nix/tools \
           > th-cross-nix-tools.nix

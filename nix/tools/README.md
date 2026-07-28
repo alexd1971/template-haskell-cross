@@ -4,8 +4,9 @@
 cross-compilation experiments.
 
 It keeps Cabal/package-db inspection out of long inline shell snippets in
-`nix/flake/experiments/consumer-ghc9103-cross.nix`. The executable is intentionally
-thin; most logic lives in library modules under `src/ThCross/NixTools`.
+the reusable Nix helpers and consumer fixture flakes. The executable is
+intentionally thin; most logic lives in library modules under
+`src/ThCross/NixTools`.
 
 ## Commands
 

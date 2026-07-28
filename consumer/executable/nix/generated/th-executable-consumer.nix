@@ -4,7 +4,7 @@
 mkDerivation {
   pname = "th-executable-consumer";
   version = "0.1.0.0";
-  src = ../../consumer/executable;
+  src = ../..;
   isLibrary = true;
   isExecutable = true;
   libraryHaskellDepends = [ base microlens-th template-haskell ];

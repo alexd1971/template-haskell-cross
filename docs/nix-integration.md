@@ -43,19 +43,12 @@ packages.${system}.consumer-ghc9103-plugin
 packages.${system}.consumer-ghc9103-ghc
 packages.${system}.consumer-ghc9103-target-context-package
 packages.${system}.cross-ghc9103-aarch64-linux
-packages.${system}.consumer-ghc9103-cross-target-context-package
-packages.${system}.consumer-ghc9103-cross-microlens-package
-packages.${system}.consumer-ghc9103-cross-aeson-package
-packages.${system}.consumer-ghc9103-cross-executable-package
-packages.${system}.consumer-ghc9103-cross-executable-qemu-smoke
-packages.${system}.consumer-ghc9103-cross-microlens-cabal-context-probe
 packages.${system}.th-cross-nix-tools
-packages.${system}.aarch64-linux-cross-probe
 checks.${system}.consumer-ghc9103-worker-smoke
 checks.${system}.consumer-ghc9103-target-context-package
-checks.${system}.cross-target-probe-aarch64-linux
 apps.${system}.regen-cabal-nix
 devShells.${system}.default
+lib.${system}.ghc9103Aarch64Linux
 ```
 
 `consumer-ghc9103-protocol` contains the shared binary protocol and splice-key
@@ -68,6 +61,66 @@ captures raw `addTopDecls` payloads.
 `cross-ghc9103-aarch64-linux` is the patched aarch64 cross compiler used by the
 package-level consumer builds. Its cross-specific patches are documented in
 `docs/ghc-cross-patches.md`.
+
+`lib.${system}.ghc9103Aarch64Linux` is the reusable API intended for external
+consumer flakes. It exposes:
+
+- `crossHaskellPkgs`: target Haskell package set built around the patched
+  aarch64-linux GHC 9.10.3.
+- `callPackageWithWorker`: call a cabal2nix-generated package while injecting
+  the TH cross plugin, worker, plugin config, package DB mapping, source dirs,
+  CPP options, and context validation.
+- `callPackageCabalContextProbe`: build only the Cabal context validation probe
+  for a package.
+- `mkDerivationWithWorker`: lower-level `mkDerivation` override for package
+  definitions that are not loaded from a cabal2nix file.
+
+## External Consumer Flake
+
+A consumer package flake can use this repository as an input and build a target
+package through the exported API:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    th-cross.url = "path:/path/to/th-cross";
+  };
+
+  outputs = { nixpkgs, th-cross, ... }:
+    let
+      system = "x86_64-linux";
+      thCross = th-cross.lib.${system}.ghc9103Aarch64Linux;
+    in
+    {
+      packages.${system}.default =
+        thCross.callPackageWithWorker ./generated/my-package.nix;
+    };
+}
+```
+
+The package file should be a normal cabal2nix-generated expression. The helper
+reuses its `getCabalDeps` metadata to derive the host-side worker package set.
+At configure time it validates that this evaluation-time dependency set matches
+Cabal's configured component graph.
+
+The local consumer fixtures mirror this external shape. Each `consumer/*`
+directory contains its own `flake.nix` with:
+
+```nix
+inputs.th-cross.url = "path:../..";
+```
+
+and builds its package through `thCross.callPackageWithWorker`.
+
+They can be evaluated like external flakes without writing fixture lock files:
+
+```bash
+nix build --no-write-lock-file ./consumer/aeson
+nix build --no-write-lock-file ./consumer/microlens
+nix build --no-write-lock-file ./consumer/target-context
+nix build --no-write-lock-file ./consumer/executable
+```
 
 ## Plugin Config
 
@@ -156,7 +209,7 @@ th-cross-nix-tool validate-cabal-component-context \
 The standalone probe exposes the same data:
 
 ```bash
-nix build .#consumer-ghc9103-cross-microlens-cabal-context-probe -L
+nix build --no-write-lock-file ./consumer/microlens#cabal-context-probe -L
 cat result/nix-support/cabal-component-deps
 ```
 
@@ -168,14 +221,13 @@ packages whose nixpkgs attribute name differs from the Cabal package name.
 
 ## Consumer Builds
 
-Build the current cross-consumer package set:
+Build the current cross-consumer fixture packages:
 
 ```bash
-nix build .#consumer-ghc9103-cross-target-context-package -L
-nix build .#consumer-ghc9103-cross-microlens-package -L
-nix build .#consumer-ghc9103-cross-aeson-package -L
-nix build .#consumer-ghc9103-cross-executable-package -L
-nix build .#consumer-ghc9103-cross-executable-qemu-smoke -L
+nix build --no-write-lock-file ./consumer/target-context -L
+nix build --no-write-lock-file ./consumer/microlens -L
+nix build --no-write-lock-file ./consumer/aeson -L
+nix build --no-write-lock-file ./consumer/executable -L
 ```
 
 Coverage:
@@ -188,8 +240,6 @@ Coverage:
   `TaggedObject` encoding, and a local generator from the current package.
 - `th-executable-consumer` checks executable components and same-package source
   module visibility.
-- `consumer-ghc9103-cross-executable-qemu-smoke` runs the produced aarch64
-  executable under `qemu-aarch64` and expects `output="Ada"`.
 
 Build the lower-level compiler/plugin pieces:
 

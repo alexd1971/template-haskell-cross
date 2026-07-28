@@ -175,12 +175,12 @@ nix build .#cross-ghc9103-aarch64-linux
 The derivation's `passthru.crossPatchNotes` contains structured metadata about
 the cross-GHC patches P1-P3.
 
-Cross-compilation of packages using this GHC is demonstrated in the
-experiment packages:
+Cross-compilation of packages using this GHC is demonstrated by the standalone
+consumer fixture flakes:
 
 ```bash
-nix build .#consumer-ghc9103-cross-target-context-package
-nix build .#consumer-ghc9103-cross-microlens-package  # with microlens-th
-nix build .#consumer-ghc9103-cross-aeson-package      # with aeson TH
-nix build .#consumer-ghc9103-cross-executable-package # executable + qemu
+nix build --no-write-lock-file ./consumer/target-context
+nix build --no-write-lock-file ./consumer/microlens  # with microlens-th
+nix build --no-write-lock-file ./consumer/aeson      # with aeson TH
+nix build --no-write-lock-file ./consumer/executable # executable component
 ```
