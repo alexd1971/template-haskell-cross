@@ -104,6 +104,36 @@ reuses its `getCabalDeps` metadata to derive the host-side worker package set.
 At configure time it validates that this evaluation-time dependency set matches
 Cabal's configured component graph.
 
+## Consumer Template
+
+Create a scaffold package with:
+
+```bash
+nix flake init -t /path/to/th-cross#cross-app
+```
+
+Then edit the generated `flake.nix` and point `inputs.th-cross.url` at the
+actual local checkout or remote flake:
+
+```nix
+inputs.th-cross.url = "path:/path/to/th-cross";
+```
+
+Build the generated package:
+
+```bash
+nix build . -L
+```
+
+The template includes an executable, a small library, an `aeson` TH splice as
+an example real TH dependency, and `nix/generated/cross-app.nix`. If the Cabal
+file changes,
+regenerate the package expression with:
+
+```bash
+cabal2nix . > nix/generated/cross-app.nix
+```
+
 The local consumer fixtures mirror this external shape. Each `consumer/*`
 directory contains its own `flake.nix` with:
 

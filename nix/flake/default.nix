@@ -65,4 +65,13 @@ in
     {
       default = import ./dev-shell.nix { inherit pkgs hs; };
     });
+
+  templates = {
+    cross-app = {
+      path = ../../templates/cross-app;
+      description = "Template Haskell cross-compilation app scaffold";
+    };
+
+    default = self.templates.cross-app;
+  };
 }
