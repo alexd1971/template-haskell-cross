@@ -38,20 +38,20 @@ it would not create an Android or aarch64 target package set.
 ```text
 packages.${system}.patched-ghc9103
 packages.${system}.host-ghc9103-worker
-packages.${system}.consumer-ghc9103-protocol
-packages.${system}.consumer-ghc9103-plugin
-packages.${system}.consumer-ghc9103-ghc
-packages.${system}.consumer-ghc9103-target-context-package
+packages.${system}.target-ghc9103-protocol
+packages.${system}.target-ghc9103-plugin
+packages.${system}.target-ghc9103-with-plugin
+packages.${system}.target-ghc9103-target-context-package
 packages.${system}.cross-ghc9103-aarch64-linux
 packages.${system}.th-cross-nix-tools
-checks.${system}.consumer-ghc9103-worker-smoke
-checks.${system}.consumer-ghc9103-target-context-package
+checks.${system}.target-ghc9103-worker-smoke
+checks.${system}.target-ghc9103-target-context-package
 apps.${system}.regen-cabal-nix
 devShells.${system}.default
 lib.${system}.ghc9103Aarch64Linux
 ```
 
-`consumer-ghc9103-protocol` contains the shared binary protocol and splice-key
+`target-ghc9103-protocol` contains the shared binary protocol and splice-key
 types used by both the plugin and the worker.
 
 `patched-ghc9103` is the native worker compiler. It applies
@@ -275,7 +275,7 @@ Build the lower-level compiler/plugin pieces:
 
 ```bash
 nix build .#host-ghc9103-worker
-nix build .#consumer-ghc9103-plugin
+nix build .#target-ghc9103-plugin
 nix build .#cross-ghc9103-aarch64-linux
 ```
 

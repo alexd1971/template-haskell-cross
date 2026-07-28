@@ -31,10 +31,9 @@ let
       ];
     });
 
-  # Consumer-side package set. This is still native x86_64-linux in the current
-  # flake, but it models the side that will eventually become a cross target
-  # package set.
-  consumerGhc9103HaskellPkgs = pkgs.haskell.packages.ghc9103.override {
+  # Target-side package set. This is still native x86_64-linux in the current
+  # flake, but it models the side that becomes the cross target package set.
+  targetGhc9103HaskellPkgs = pkgs.haskell.packages.ghc9103.override {
     overrides = selfH: superH: {
       th-cross-protocol =
         pkgs.callPackage ../th-cross-protocol.nix {
@@ -59,7 +58,7 @@ let
       compilerConfig = ghc9103CompilerConfig;
       overrides = selfH: superH: {
         # Shared protocol package used by both worker and plugin. The public
-        # consumer-side plugin remains `consumerGhc9103HaskellPkgs.th-cross-plugin`.
+        # target-side plugin remains `targetGhc9103HaskellPkgs.th-cross-plugin`.
         th-cross-protocol =
           pkgs.callPackage ../th-cross-protocol.nix {
             callPackage = selfH.callPackage;
@@ -85,9 +84,9 @@ let
   nixTools = pkgs.haskell.packages.ghc9103.callPackage ../th-cross-nix-tools.nix { };
 in
 {
-  inherit patchedNativeGhc9103 hostGhc9103HaskellPkgs consumerGhc9103HaskellPkgs nixTools;
+  inherit patchedNativeGhc9103 hostGhc9103HaskellPkgs targetGhc9103HaskellPkgs nixTools;
 
-  consumerGhc9103 = consumerGhc9103HaskellPkgs.ghcWithPackages (hpkgs: [
+  targetGhc9103WithPlugin = targetGhc9103HaskellPkgs.ghcWithPackages (hpkgs: [
     hpkgs.th-cross-plugin
   ]);
 }

@@ -4,14 +4,14 @@
 # combinations. Heavy cross-GHC builds are exposed as packages/experiments
 # instead of mandatory checks.
 {
-  consumer-ghc9103-worker-smoke = pkgs.runCommand
-    "th-cross-consumer-ghc9103-worker-smoke"
+  target-ghc9103-worker-smoke = pkgs.runCommand
+    "th-cross-target-ghc9103-worker-smoke"
     { }
     ''
       build_dir="$TMPDIR/example-build"
       mkdir -p "$build_dir"
 
-      ${hs.consumerGhc9103}/bin/ghc \
+      ${hs.targetGhc9103WithPlugin}/bin/ghc \
         -v0 \
         -fno-code \
         -fforce-recomp \
@@ -27,6 +27,6 @@
       touch "$out"
     '';
 
-  consumer-ghc9103-target-context-package =
-    hs.consumerGhc9103HaskellPkgs.th-target-context-consumer;
+  target-ghc9103-target-context-package =
+    hs.targetGhc9103HaskellPkgs.th-target-context-consumer;
 }

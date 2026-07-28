@@ -2,11 +2,11 @@
 
 let
   ghc9103Wrapper = pkgs.writeShellScriptBin "ghc-9.10.3" ''
-    exec ${hs.consumerGhc9103}/bin/ghc "$@"
+    exec ${hs.targetGhc9103WithPlugin}/bin/ghc "$@"
   '';
 
   ghc9103PkgWrapper = pkgs.writeShellScriptBin "ghc-9.10.3-pkg" ''
-    exec ${hs.consumerGhc9103}/bin/ghc-pkg "$@"
+    exec ${hs.targetGhc9103WithPlugin}/bin/ghc-pkg "$@"
   '';
 
   thCrossBuild = pkgs.writeShellScriptBin "th-cross-build" ''

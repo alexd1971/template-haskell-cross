@@ -7,7 +7,7 @@ let
   pluginLibraryMetadataScript =
     { pluginLibDir
     , nativeGhcPkg
-    , consumerGhcVersion
+    , targetPluginGhcVersion
     }:
     ''
       plugin_pkg_db="${pluginLibDir}/lib/package.conf.d"
@@ -15,7 +15,7 @@ let
       plugin_hs_library=$("${nativeGhcPkg}" --package-db="$plugin_pkg_db" field th-cross-plugin hs-libraries --simple-output 2>/dev/null)
       plugin_dynamic_library_dirs=$("${nativeGhcPkg}" --package-db="$plugin_pkg_db" field th-cross-plugin dynamic-library-dirs --simple-output 2>/dev/null)
       set -- $plugin_dynamic_library_dirs
-      plugin_so="$1/lib''${plugin_hs_library}-ghc${consumerGhcVersion}.so"
+      plugin_so="$1/lib''${plugin_hs_library}-ghc${targetPluginGhcVersion}.so"
       plugin_library_path=$(printf '%s\n' $plugin_dynamic_library_dirs | paste -sd:)
     '';
 
@@ -152,9 +152,9 @@ EOF
     { crossPkgs
     , crossGhc
     , targetGhcPkg
-    , consumerPlugin
+    , targetPlugin
     , nativeGhcPkg
-    , consumerGhcVersion
+    , targetPluginGhcVersion
     }:
     let
       crossHaskellPkgs =
@@ -162,7 +162,7 @@ EOF
           inherit crossPkgs crossGhc;
         };
 
-      pluginLibDir = "${consumerPlugin}/lib/ghc-${consumerGhcVersion}";
+      pluginLibDir = "${targetPlugin}/lib/ghc-${targetPluginGhcVersion}";
 
       mkDerivationWithWorker =
         hostPackageNames:
@@ -182,7 +182,7 @@ EOF
             preConfigure = (args.preConfigure or "") + ''
 
               ${pluginLibraryMetadataScript {
-                inherit pluginLibDir nativeGhcPkg consumerGhcVersion;
+                inherit pluginLibDir nativeGhcPkg targetPluginGhcVersion;
               }}
 
               # The external plugin is loaded into the cross-GHC process by the
@@ -262,9 +262,9 @@ EOF
       crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
       crossGhc = crossGhc9103Aarch64;
       targetGhcPkg = "${crossGhc9103Aarch64}/bin/aarch64-unknown-linux-gnu-ghc-pkg";
-      consumerPlugin = hs.consumerGhc9103HaskellPkgs.th-cross-plugin;
+      targetPlugin = hs.targetGhc9103HaskellPkgs.th-cross-plugin;
       nativeGhcPkg = "${pkgs.haskell.compiler.ghc9103}/bin/ghc-pkg";
-      consumerGhcVersion = "9.10.3";
+      targetPluginGhcVersion = "9.10.3";
     };
 in
 {
