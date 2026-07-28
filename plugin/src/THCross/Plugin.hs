@@ -1,6 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 
--- | Prototype GHC plugin for intercepting Template Haskell splice evaluation.
+-- | GHC plugin for intercepting Template Haskell splice evaluation.
 --
 -- The plugin installs a custom 'runMetaHook' through the driver plugin hook.
 -- With @-fplugin-opt=THCross.Plugin:worker=PATH@ it asks an external binary
@@ -471,7 +471,7 @@ whenDebug :: PluginConfig -> String -> TcM ()
 whenDebug config message =
   when (pluginDebug config) (liftIO (putStrLn message))
 
--- | Human-readable splice kind used in prototype logging.
+-- | Human-readable splice kind used in plugin logging.
 metaRequestKind :: MetaRequest -> SpliceKind
 metaRequestKind = \case
   MetaE{} -> ExpressionSplice
@@ -517,9 +517,9 @@ mkSpliceRequest spliceModuleName componentUnitId spliceKind sourceLoc renderedSp
 -- | Convert GHC's source span into protocol data.
 --
 -- Real spans carry both the source file path and 1-based line/column bounds.
--- Unhelpful spans cannot identify a real source location, so the prototype uses
--- a synthetic placeholder that keeps the protocol total but will not match a
--- real worker capture.
+-- Unhelpful spans cannot identify a real source location, so the plugin uses a
+-- synthetic placeholder that keeps the protocol total but will not match a real
+-- worker capture.
 protocolSourceSpan :: SrcSpan -> (FilePath, SourceSpan)
 protocolSourceSpan = \case
   RealSrcSpan realSpan _ ->

@@ -22,8 +22,8 @@ let
         haskellLib = pkgs.haskell.lib.compose;
       };
 
-  # Native GHC 9.10.3 with the minimal export-list patch needed by the upcoming
-  # raw Template Haskell AST worker path.
+  # Native GHC 9.10.3 with the minimal export-list patch needed by the raw
+  # Template Haskell AST worker path.
   patchedNativeGhc9103 =
     pkgs.haskell.compiler.ghc9103.overrideAttrs (old: {
       patches = (old.patches or []) ++ [

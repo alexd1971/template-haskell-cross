@@ -51,7 +51,7 @@ declaration
 annotation-wrapper
 ```
 
-The current prototype supports `expression`, `type`, `pattern`, and
+The current implementation supports `expression`, `type`, `pattern`, and
 `declaration`. `annotation-wrapper` is supported only as an internal
 same-GHC-version helper for replaying annotation declarations produced by
 `addTopDecls`.
@@ -85,6 +85,7 @@ Fields:
   forwarding target-like preprocessing options such as `-D`, `-U`, `-I`, and
   `-optP` so host-side `reify` observes the same CPP-shaped source as the
   cross-side compiler.
+
 ## Successful Response
 
 `dependentFiles` contains files registered by host-side Template Haskell through
@@ -109,9 +110,9 @@ splice result.
 
 `annotationWrapper` contains a binary-encoded GHC `Serialized` value used only
 for `annotation-wrapper` responses. This is intentionally not a cross-version
-format. It exists so the prototype can replay `AnnD` declarations generated
-through `addTopDecls`; host and cross GHC must agree on the relevant internal
-binary representation.
+format. It exists so the implementation can replay `AnnD` declarations
+generated through `addTopDecls`; host and cross GHC must agree on the relevant
+internal binary representation.
 
 Raw payload fields contain `Data.Binary`-encoded `template-haskell` AST values
 for normal splice results:
@@ -131,14 +132,18 @@ through `reportWarning` or `reportError`. The worker extracts
 flag distinguishes warning from error. The cross-side plugin replays those
 diagnostics into the current GHC session.
 
-Diagnostic entry:
+`diagnostics` entries contain:
 
-`severity` is either `warning` for `reportWarning` or `error` for `reportError`.
+- `isError`: `False` for `reportWarning`, `True` for `reportError`.
+- `message`: user-supplied diagnostic text.
 
-Fields:
+`SpliceOk` carries:
 
 - `requestId`: request id copied from the request.
-- `status`: `"ok"`.
+- `spliceResult`: result payload and replayable side effects.
+
+`spliceResult` contains:
+
 - `expression`: same-version Template Haskell expression payload.
 - `pattern`: same-version Template Haskell pattern payload.
 - `type`: same-version Template Haskell type payload.
@@ -154,15 +159,14 @@ Fields:
 
 ## Error Response
 
-Fields:
+`SpliceError` carries:
 
 - `requestId`: request id copied from the request, if known.
-- `status`: `"error"`.
 - `message`: human-readable error text.
 
 ## Versioning
 
-The first prototype has no explicit protocol version field. Because the payload
+The current protocol has no explicit protocol version field. Because the payload
 contains `Binary`-encoded same-version Template Haskell values, compatibility is
 currently defined by using the same patched GHC/template-haskell version on both
 sides.

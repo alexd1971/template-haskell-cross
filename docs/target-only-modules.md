@@ -1,6 +1,8 @@
 # Target-Only Modules and Imports
 
-Target: GHC 9.8.4.
+Historical source references: GHC 9.8.4. The current implementation targets
+GHC 9.10.3, so line-number references in this document are investigative notes,
+not version-independent API documentation.
 
 This document investigates the case where the module containing a Template
 Haskell splice cannot be compiled by the native host worker.
@@ -63,9 +65,9 @@ No `SpliceResult` is available for the requested splice.
 
 ## Why This Is Different From Remote Iserv
 
-The goal of this prototype is not to run target code. The host worker executes
-Template Haskell generator code on the build host and returns textual generated
-Haskell.
+The goal of this implementation is not to run target code. The host worker
+executes Template Haskell generator code on the build host and returns raw
+Template Haskell AST payloads.
 
 However, the current module-aware approach still asks native GHC to load the
 whole source module. That means declarations/imports before and around the

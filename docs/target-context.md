@@ -1,12 +1,14 @@
 # Target Context and CPP
 
-Target: GHC 9.8.4.
+Historical source references: GHC 9.8.4. The current implementation targets
+GHC 9.10.3, so line-number references in this document are investigative notes,
+not version-independent API documentation.
 
 This document investigates how the host worker should reproduce the source
 context seen by the cross GHC when Template Haskell is evaluated on the build
 host.
 
-## Current Prototype Behavior
+## Current Implementation Behavior
 
 The cross-side plugin sends the worker:
 
@@ -67,7 +69,7 @@ target-like preprocessing flags:
 
 So the worker can reproduce selected cross compiler options, but only when the
 build integration passes them explicitly. The current Nix generic-builder
-prototype derives unconditional Cabal `cpp-options` and passes each one as
+integration derives unconditional Cabal `cpp-options` and passes each one as
 `host-ghc-option=...`; the plugin does not infer those options from cross
 `DynFlags` by itself.
 
@@ -179,9 +181,9 @@ The current worker knows a minimal component context:
 - explicit host GHC options.
 
 It does not derive this context itself from the Cabal build plan. The Nix
-prototype currently supplies these values explicitly for the consumer fixtures.
+integration currently supplies these values explicitly for the consumer fixtures.
 
-That is enough for the small prototype fixtures, but not enough for real
+That is enough for the small consumer fixtures, but not enough for real
 cross-package builds unless the build integration provides the right context.
 
 ## Can Host GHC Execute on Host but Preprocess Like Target?
@@ -217,7 +219,7 @@ preprocess and resolve the source as close as possible to the cross target conte
 compile/import only modules that are host-buildable
 ```
 
-This split is the central hard problem after the local prototype.
+This split is the central hard problem after the local implementation.
 
 ## MVP Scope
 
@@ -231,7 +233,7 @@ observed by TH
 host and cross GHC use compatible package flags for TH-observed code
 ```
 
-If these are not true, the prototype may generate incorrect code.
+If these are not true, the implementation may generate incorrect code.
 
 ## Recommended Next Implementation Steps
 

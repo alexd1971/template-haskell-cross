@@ -1,10 +1,12 @@
 # Template Haskell `Q` Effects
 
-Target: GHC 9.8.4.
+Historical source references: GHC 9.8.4. The current implementation targets
+GHC 9.10.3, so line-number references in this document are investigative notes,
+not version-independent API documentation.
 
-This document classifies Template Haskell `Q` operations for the prototype where
-the host worker evaluates a splice and sends only textual generated Haskell back
-to the cross-side plugin.
+This document classifies Template Haskell `Q` operations for the implementation
+where the host worker evaluates a splice and sends raw Template Haskell AST
+payloads back to the cross-side plugin.
 
 ## Source Locations
 
@@ -28,10 +30,10 @@ Exact GHC 9.8.4 details:
 
 ## Key Observation
 
-Returning only the primary generated Haskell fragment preserves only this part:
+Returning the primary raw Template Haskell payload preserves only this part:
 
 ```text
-Q result -> TH AST -> textual Haskell -> cross parser -> GhcPs AST
+Q result -> TH AST -> binary protocol -> cross-side TH-to-GHC conversion
 ```
 
 It does not automatically preserve additional effects recorded in the host GHC
@@ -46,28 +48,28 @@ For correctness, every effect that changes GHC compilation state must either be:
 
 ## Classification
 
-| Operation | GHC 9.8.4 behavior | Prototype classification | Recommendation |
+| Operation | GHC 9.8.4 behavior | Current classification | Recommendation |
 | --- | --- | --- | --- |
-| `addDependentFile` | `qAddDependentFile` prepends the path to `tcg_dependent_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `dependentFiles :: [FilePath]`; the cross-side plugin appends them to `tcg_dependent_files`. |
+| `addDependentFile` | `qAddDependentFile` prepends the path to `tcg_dependent_files`. | Forwarded to cross GHC. | The worker response includes `dependentFiles :: [FilePath]`; the cross-side plugin appends them to `tcg_dependent_files`. |
 | `addTempFile` | `qAddTempFile` allocates a GHC-session temp file through `newTempName`. | Host-only effect, covered by smoke test. | Do not replay temp file allocation directly. If the file is later passed to `addForeignFilePath` or `addDependentFile`, propagate that higher-level effect. |
 | `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Forwarded through the raw TH protocol. | The patched host GHC records raw `[TH.Dec]` values passed to `qAddTopDecls`. The worker response includes those declarations; the cross-side plugin converts them locally and appends them to `tcg_th_topdecls`, or grafts them into a declaration-splice result. `AnnD` is covered by same-GHC-version annotation-wrapper forwarding. |
 | `addForeignFile` / `addForeignSource` | `addForeignFile` is a deprecated alias for `addForeignSource`; `addForeignSource` writes source text to a temp file and calls `addForeignFilePath`. | Forwarded through existing `addForeignFilePath` propagation. | Covered by an integration test. The generated temp file path is host-side but is passed to cross GHC as a foreign file path. |
-| `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Forwarded to cross GHC in the prototype. | The worker response includes `foreignFiles`; the cross-side plugin appends them to `tcg_th_foreign_files`, so the target-side build owns compilation/linking. |
+| `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Forwarded to cross GHC. | The worker response includes `foreignFiles`; the cross-side plugin appends them to `tcg_th_foreign_files`, so the target-side build owns compilation/linking. |
 | `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Unsupported in MVP; must be forwarded before production use. | Future protocol can carry `corePlugins :: [String]`; cross-side replay must check that the plugin is available to the cross compiler environment. |
 | `addModFinalizer` | Stores a finalizer reference for later module-finalizer execution with the local environment. | Must be modeled explicitly or unsupported. | Unsupported in MVP. Host execution may run finalizers, but their resulting diagnostics/dependencies/state changes are not automatically visible to cross GHC. |
-| `reportWarning` | `qReport False` adds a diagnostic and continues. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError False message)`. | Forwarded to cross GHC in the prototype. | The worker response includes this TH diagnostic; the cross-side plugin replays it with `addDiagnostic`. |
+| `reportWarning` | `qReport False` adds a diagnostic and continues. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError False message)`. | Forwarded to cross GHC. | The worker response includes this TH diagnostic; the cross-side plugin replays it with `addDiagnostic`. |
 | `reportError` | `qReport True` adds an error; the splice may continue unless it fails. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError True message)`. | Partially forwarded. | The protocol can carry this TH diagnostic and the cross-side plugin replays it with `addErr`. If host GHC fails before a splice result is captured, the worker still returns a worker error string. |
 | `recover` | `qRecover` uses `tryTcDiscardingErrs`; recovered errors are discarded if the recovery branch is used. | Safe automatically inside host evaluation, covered by integration test. | No replay needed for `recover` itself. Effects produced by the branch that actually runs still need their own classification. |
 | `getQ` | Reads module-local TH state from `tcg_th_state`. | Host-local, safe for host-evaluated splices in one module load, covered by integration test. | No cross replay needed while all splices in the module are evaluated by the host worker. Document as unsupported for mixed host/cross TH execution. |
 | `putQ` | Writes module-local TH state into `tcg_th_state`. | Host-local, safe for host-evaluated splices in one module load, covered by integration test. | Same as `getQ`. Whole-module host expansion preserves ordering-dependent `Q` state for captured results. |
-| `runIO` | Runs arbitrary `IO` in the host process. | Host-only effect, covered by integration test. | The generated fragment reflects the returned value, but external side effects are not replayed. Users must call `addDependentFile` for file dependencies. Target-only IO assumptions are unsupported. |
+| `runIO` | Runs arbitrary `IO` in the host process. | Host-only effect, covered by integration test. | The raw TH result reflects the returned value, but external side effects are not replayed. Users must call `addDependentFile` for file dependencies. Target-only IO assumptions are unsupported. |
 
 ## MVP Policy
 
 The current MVP should support:
 
 ```text
-primary generated Haskell fragment
+primary raw TH payload
 reportError as replayed diagnostic when the host worker captures a splice result
 recover behavior inside host execution
 getQ/putQ inside one whole-module host load
@@ -86,7 +88,7 @@ complete diagnostic replay
 arbitrary Q effect replay
 ```
 
-Implemented in the prototype:
+Implemented in the current code:
 
 ```text
 addDependentFile propagation
@@ -204,7 +206,7 @@ Why this is harder than `addDependentFile` or `addForeignFilePath`:
   use Strategy B grafting so the added declarations and primary result are
   returned as one `MetaD` expansion.
 
-The prototype now uses a hybrid implementation: Strategy A for non-declaration
+The current code uses a hybrid implementation: Strategy A for non-declaration
 splices, and Strategy B for declaration splices.
 
 ### Strategy A: replay through `tcg_th_topdecls`
@@ -213,10 +215,9 @@ Conceptual flow:
 
 ```text
 host splice executes
-  -> host qAddTopDecls converts [Dec] to [LHsDecl GhcPs]
-  -> worker captures newly added declarations
-  -> worker pretty-prints them as Haskell text
-  -> cross plugin parses them with cross GHC
+  -> patched host qAddTopDecls records raw [TH.Dec]
+  -> worker captures newly added raw declarations
+  -> cross plugin converts them with cross GHC
   -> cross plugin appends them to cross tcg_th_topdecls
 ```
 
@@ -234,7 +235,7 @@ Required implementation details:
 
 - Capture a delta, not the whole `tcg_th_topdecls`, for each splice. The field is
   cumulative, so sending the whole list for every splice would duplicate earlier
-  additions. The prototype does this by temporarily clearing `tcg_th_topdecls`
+  additions. The implementation does this by temporarily clearing `tcg_th_topdecls`
   around one host splice evaluation, reading the declarations produced by that
   splice, and then restoring `addedTopDecls <> previousTopDecls`.
 - Preserve GHC's prepend order. GHC uses `ds ++ topds`, so the captured wire
@@ -248,9 +249,9 @@ Required implementation details:
   The cross-side plugin repeats GHC's top-declaration check and records exact
   binders in this ref.
 
-Prototype validation:
+Current validation:
 
-The prototype implements Strategy A far enough to pass native-GHC-valid tests
+The implementation covers Strategy A far enough to pass native-GHC-valid tests
 where expression splices call `addTopDecls`. The host worker captures the added
 declarations, sends them as `addedTopDecls`, and the cross-side plugin logs
 `th-cross: added top decls N` after replay.
@@ -278,7 +279,7 @@ Integration coverage now includes:
 
 Annotation-wrapper caveat:
 
-- Replayed `AnnD` declarations trigger a later `MetaAW` request. The prototype
+- Replayed `AnnD` declarations trigger a later `MetaAW` request. The implementation
   handles that request by returning a binary-encoded GHC `Serialized` payload
   captured by the host worker.
 - This is intentionally same-GHC-version support, like the raw TH payloads used
@@ -334,7 +335,7 @@ Relevant upstream GHC 9.8.4 tests found in `testsuite/tests/th`:
   through `addTopDecls` are typechecked.
 - `T13587.hs` / `T13587A.hs`: `addTopDecls` with foreign imports and typed
   splices. In the GHC 9.8.4 testsuite this test is marked `expect_broken(13587)`,
-  so it is not a stable acceptance test for this prototype yet.
+  so it is not a stable acceptance test for this implementation yet.
 
 ### Strategy B: graft raw declarations into declaration splice expansion
 
@@ -403,7 +404,7 @@ both the added declarations and the splice result carry the same `NameU`.
 | Ordering risk | Reduced for native-GHC-valid expression-splice cases now covered by tests | Lower for declaration splices, but narrower semantics |
 | `tcg_th_topnames` risk | Cross-side replay mirrors exact binders into `tcg_th_topnames` | Normal declaration splice path handles names directly |
 | Expression-splice support | Possible | Not supported initially |
-| Prototype status | Implemented for a tested subset | Implemented for a tested subset |
+| Current status | Implemented for a tested subset | Implemented for a tested subset |
 | Semantic completeness | Better target | Partial but more controlled |
 
 Recommendation:
@@ -490,20 +491,17 @@ with:
 updTcRef var ((lang, fp):)
 ```
 
-### Prototype Behavior
+### Current Behavior
 
-The prototype already forwards `tcg_th_foreign_files` through the worker
-response as:
+The implementation already forwards `tcg_th_foreign_files` through the worker
+response as `foreignFiles :: [SpliceForeignFile]`, where each entry contains the
+foreign source language and path:
 
-```json
-{
-  "foreignFiles": [
-    {
-      "language": "c",
-      "path": "..."
-    }
-  ]
-}
+```haskell
+SpliceForeignFile
+  { spliceForeignFileLang = LangC
+  , spliceForeignFilePath = "..."
+  }
 ```
 
 and replays them into cross-side `tcg_th_foreign_files`.
@@ -572,7 +570,7 @@ Typed splices have an extra staging detail. GHC's note "Collecting modFinalizers
 in typed splices" says finalizers are first collected in the local environment
 and then moved to the global finalizer list with the current local environment.
 
-### Prototype Behavior
+### Current Behavior
 
 The current host worker loads the module with native GHC. That means host GHC
 may execute module finalizers during the host-side load.
@@ -658,7 +656,7 @@ with:
 updTcRef th_coreplugins_var (plugin:)
 ```
 
-### Prototype Behavior
+### Current Behavior
 
 The current worker does not capture `tcg_th_coreplugins`, and the protocol has
 no field for core plugins. If host-side TH calls `addCorePlugin`, native GHC may
@@ -672,14 +670,10 @@ Core-to-Core optimization or even program semantics.
 
 `addCorePlugin` remains unsupported in the MVP.
 
-Unlike `addModFinalizer`, this effect has a simple wire shape:
+Unlike `addModFinalizer`, this effect would have a simple wire shape:
 
-```json
-{
-  "corePlugins": [
-    "My.Core.Plugin"
-  ]
-}
+```haskell
+corePlugins :: [String]
 ```
 
 and cross-side replay would be mechanically similar to:
@@ -709,5 +703,5 @@ Recommended future implementation:
    the current package, because GHC explicitly rejects that shape.
 
 Until then, a production-facing mode should fail explicitly if the worker
-observes a non-empty `tcg_th_coreplugins` delta. The current prototype does not
+observes a non-empty `tcg_th_coreplugins` delta. The current implementation does not
 yet detect that condition.

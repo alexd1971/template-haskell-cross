@@ -148,7 +148,7 @@ hostWorkerBuildDir =
 --
 -- Packaged environments should set @TH_HOST_GHC_LIBDIR@ so the worker does not
 -- accidentally discover the consumer GHC from @PATH@. The @ghc --print-libdir@
--- fallback keeps the manually built prototype convenient to run.
+-- fallback keeps the manually built worker convenient to run.
 getGhcLibDir :: IO FilePath
 getGhcLibDir = do
   explicitLibDir <- lookupEnv "TH_HOST_GHC_LIBDIR"

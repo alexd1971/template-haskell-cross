@@ -45,15 +45,13 @@ module + ":" + splice kind + ":" + source span
 
 The wire protocol treats the key as opaque:
 
-```json
-{
-  "spliceKey": "..."
-}
+```haskell
+requestSpliceKey :: SpliceKey
 ```
 
 The current digest is not a cryptographic hash. If this key becomes persistent
 cache metadata, the digest format should be replaced with an explicit format such
-as `sha256:<digest>` without changing the JSON field shape.
+as `sha256:<digest>` without changing the protocol field shape.
 
 ## Why Not Pretty-Printed Expressions
 
@@ -98,9 +96,9 @@ applies, but span attribution must be verified.
 
 Source changes during compilation:
 
-The prototype reads the source file again in the worker. A later version should
-detect source changes, for example by including a module source hash in the
-request or using a build-system-provided immutable source path.
+The worker reads the source file again. A later version should detect source
+changes, for example by including a module source hash in the request or using a
+build-system-provided immutable source path.
 
 CPP/target context:
 

@@ -1,6 +1,6 @@
 # Nix Integration
 
-This document describes the current Nix shape of the TH cross prototype.
+This document describes the current Nix shape of TH cross-compilation support.
 Historical cross-version and textual-protocol experiments are kept in
 `docs/cross-version.md` and `docs/plain-nixpkgs-cross-ghc.md`.
 
@@ -269,7 +269,7 @@ normal flake evaluation.
 The current `cross-ghc9103-aarch64-linux` derivation starts from
 `pkgs.pkgsCross.aarch64-multiplatform.buildPackages.haskell.compiler.ghc9103`.
 That path is designed for the standard cross-TH story where GHC may use a
-target `iserv`. The TH cross prototype does not use target iserv: splice
+target `iserv`. TH cross-compilation support does not use target iserv: splice
 evaluation happens in the native worker and the cross compiler only loads a
 native plugin.
 

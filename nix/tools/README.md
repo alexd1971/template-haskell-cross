@@ -63,6 +63,6 @@ th-cross-nix-tool validate-cabal-component-context \
   OUTPUT_DIR
 ```
 
-This is a guardrail for the current prototype: the worker package environment is
-still derived from nixpkgs Haskell dependency metadata, not from a complete
-Cabal component context model.
+This is a guardrail for the current implementation: the worker package
+environment is still derived from nixpkgs Haskell dependency metadata, not from
+a complete Cabal component context model.
