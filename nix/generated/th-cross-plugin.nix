@@ -1,5 +1,5 @@
-{ mkDerivation, base, binary, bytestring, directory
-, filepath, ghc, ghc-boot, ghci, lib, process, tasty, tasty-hunit
+{ mkDerivation, base, binary, bytestring, directory, filepath, ghc
+, ghc-boot, ghci, lib, process, tasty, tasty-hunit
 , template-haskell, th-cross-protocol
 }:
 mkDerivation {

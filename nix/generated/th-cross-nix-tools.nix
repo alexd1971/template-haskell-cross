@@ -11,8 +11,9 @@ mkDerivation {
     base bytestring Cabal directory filepath process
   ];
   executableHaskellDepends = [
-    base bytestring Cabal directory filepath process
+    base bytestring Cabal directory filepath
   ];
   doHaddock = false;
   license = lib.meta.getLicenseFromSpdxId "BSD-3-Clause";
+  mainProgram = "th-cross-nix-tool";
 }

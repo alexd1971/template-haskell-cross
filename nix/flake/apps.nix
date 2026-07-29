@@ -20,17 +20,29 @@
         ${pkgs.cabal2nix}/bin/cabal2nix ../../worker \
           > th-host-worker.nix
 
-        ${pkgs.cabal2nix}/bin/cabal2nix ../../examples/target-context \
-          > ../../examples/target-context/nix/generated/th-target-context-consumer.nix
+        (
+          cd ../../examples/target-context/nix/generated
+          ${pkgs.cabal2nix}/bin/cabal2nix ../.. \
+            > th-target-context-consumer.nix
+        )
 
-        ${pkgs.cabal2nix}/bin/cabal2nix ../../examples/microlens \
-          > ../../examples/microlens/nix/generated/th-microlens-consumer.nix
+        (
+          cd ../../examples/microlens/nix/generated
+          ${pkgs.cabal2nix}/bin/cabal2nix ../.. \
+            > th-microlens-consumer.nix
+        )
 
-        ${pkgs.cabal2nix}/bin/cabal2nix ../../examples/aeson \
-          > ../../examples/aeson/nix/generated/th-aeson-consumer.nix
+        (
+          cd ../../examples/aeson/nix/generated
+          ${pkgs.cabal2nix}/bin/cabal2nix ../.. \
+            > th-aeson-consumer.nix
+        )
 
-        ${pkgs.cabal2nix}/bin/cabal2nix ../../examples/executable \
-          > ../../examples/executable/nix/generated/th-executable-consumer.nix
+        (
+          cd ../../examples/executable/nix/generated
+          ${pkgs.cabal2nix}/bin/cabal2nix ../.. \
+            > th-executable-consumer.nix
+        )
 
         ${pkgs.cabal2nix}/bin/cabal2nix ../../nix/tools \
           > th-cross-nix-tools.nix

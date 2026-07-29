@@ -1,8 +1,13 @@
 dist-newstyle/
 dist-newstyle-nix/
 .cabal-store-nix/
+.agents/
+.codex/
 *.hi
 *.o
 *.dyn_hi
 *.dyn_o
+result
+result-*
 examples/*/flake.lock
+templates/*/flake.lock

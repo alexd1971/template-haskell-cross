@@ -1,5 +1,5 @@
-{ mkDerivation, base, binary, bytestring, ghc, ghc-boot, ghci
-, lib, template-haskell
+{ mkDerivation, base, binary, bytestring, ghc, ghc-boot, ghci, lib
+, template-haskell
 }:
 mkDerivation {
   pname = "th-cross-protocol";

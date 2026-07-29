@@ -84,7 +84,7 @@ package through the exported API:
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    th-cross.url = "path:/path/to/th-cross";
+    th-cross.url = "github:alexd1971/template-haskell-cross";
   };
 
   outputs = { nixpkgs, th-cross, ... }:
@@ -132,7 +132,7 @@ Add a flake that delegates the package derivation to `th-cross`:
 ```nix
 {
   inputs = {
-    th-cross.url = "path:/path/to/th-cross";
+    th-cross.url = "github:alexd1971/template-haskell-cross";
   };
 
   outputs = { th-cross, ... }:
@@ -187,14 +187,14 @@ Operational rules:
 Create a scaffold package with:
 
 ```bash
-nix flake init -t /path/to/th-cross#cross-app
+nix flake init -t github:alexd1971/template-haskell-cross#cross-app
 ```
 
 Then edit the generated `flake.nix` and point `inputs.th-cross.url` at the
 actual local checkout or remote flake:
 
 ```nix
-inputs.th-cross.url = "path:/path/to/th-cross";
+inputs.th-cross.url = "github:alexd1971/template-haskell-cross";
 ```
 
 Build the generated package:

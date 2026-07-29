@@ -2,9 +2,7 @@
   description = "Template Haskell cross-compilation app scaffold";
 
   inputs = {
-    # Replace this with your th-cross source, for example:
-    # th-cross.url = "github:your-org/th-cross";
-    th-cross.url = "path:/path/to/th-cross";
+    th-cross.url = "github:alexd1971/template-haskell-cross";
   };
 
   outputs = { th-cross, ... }:
