@@ -158,6 +158,33 @@ GHC grows a supported hook for observing TH side effects before conversion.
 
 ---
 
+## Current Necessity After Raw TH Protocol
+
+The raw TH protocol removed the old textual replay path, but it did not remove
+the need for the current GHC patches.
+
+| Patch | Still needed? | Reason |
+| --- | --- | --- |
+| P1 `HAVE_INTERNAL_INTERPRETER` | Yes | The cross compiler still loads `THCross.Plugin` through `-fplugin-library`. `GHC.Driver.Plugins.loadExternalPlugins` is compiled behind this macro, independently of the wire protocol. |
+| P2 `--export-dynamic` | Yes | The plugin shared object is still `dlopen`'d into the cross-GHC process and must resolve RTS/GHC symbols from the executable. Raw TH changes the payload, not dynamic linking. |
+| P3 empty finalizers | Yes | Normal splice handling still calls `getUntypedSpliceBody`, which records `ThModFinalizers []`. Later `tcRnSrcDecls` calls `runRemoteModFinalizers`, whose upstream implementation calls `tcGetInterp` before checking whether the list is empty. |
+| P4 raw TH runners/addTopDecls capture | Yes | The worker imports `runTHExp`, `runTHPat`, `runTHType`, and `runTHDec`, and reads `tcg_th_topdecls_th` to forward raw `addTopDecls` payloads. |
+
+P1-P3 are cross-GHC execution/linking fixes. P4 is the host-worker raw TH
+extraction patch. They solve different problems and are not interchangeable.
+
+The only plausible future reduction is splitting P4 into two upstreamable
+pieces:
+
+- export `runTHExp`, `runTHPat`, `runTHType`, and `runTHDec`;
+- expose or hook raw `addTopDecls` side effects.
+
+The current implementation needs both halves of P4 because `addTopDecls` can
+introduce exact names that must be transported as raw `TH.Dec`, not as rendered
+Haskell.
+
+---
+
 ## Usage
 
 The patched native worker GHC is exposed as:

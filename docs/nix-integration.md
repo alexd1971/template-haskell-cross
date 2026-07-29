@@ -2,7 +2,9 @@
 
 This document describes the current Nix shape of TH cross-compilation support.
 Historical cross-version and textual-protocol experiments are kept in
-`docs/cross-version.md` and `docs/plain-nixpkgs-cross-ghc.md`.
+`docs/cross-version.md` and `docs/plain-nixpkgs-cross-ghc.md`. Current
+source-level GHC version compatibility notes are tracked in
+`docs/ghc-version-support.md`.
 
 ## Architecture
 
