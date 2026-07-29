@@ -104,7 +104,85 @@ reuses its `getCabalDeps` metadata to derive the host-side worker package set.
 At configure time it validates that this evaluation-time dependency set matches
 Cabal's configured component graph.
 
-## Consumer Template
+## Existing Package Migration
+
+For an existing Cabal package, keep the Cabal file as the source of truth and
+add only the Nix wrapper needed to load `th-cross`.
+
+Minimal layout:
+
+```text
+my-package/
+  flake.nix
+  my-package.cabal
+  src/...
+  app/...
+  nix/generated/my-package.nix
+```
+
+Generate the package expression from the package root:
+
+```bash
+mkdir -p nix/generated
+cabal2nix . > nix/generated/my-package.nix
+```
+
+Add a flake that delegates the package derivation to `th-cross`:
+
+```nix
+{
+  inputs = {
+    th-cross.url = "path:/path/to/th-cross";
+  };
+
+  outputs = { th-cross, ... }:
+    let
+      system = "x86_64-linux";
+      thCross = th-cross.lib.${system}.ghc9103Aarch64Linux;
+    in
+    {
+      packages.${system}.default =
+        thCross.callPackageWithWorker ./nix/generated/my-package.nix;
+    };
+}
+```
+
+Build:
+
+```bash
+nix build --no-write-lock-file . -L
+```
+
+If dependency resolution looks wrong, first inspect the Cabal context that the
+integration sees:
+
+```nix
+packages.${system}.cabal-context-probe =
+  thCross.callPackageCabalContextProbe ./nix/generated/my-package.nix;
+```
+
+Then run:
+
+```bash
+nix build --no-write-lock-file .#cabal-context-probe -L
+cat result/nix-support/cabal-component-deps
+cat result/nix-support/nix-derived-host-package-names
+```
+
+Operational rules:
+
+- Regenerate `nix/generated/my-package.nix` after changing `build-depends`,
+  components, `hs-source-dirs`, or Cabal conditionals.
+- Keep TH generator dependencies in normal `build-depends`; the wrapper derives
+  the host worker package environment from the cabal2nix metadata.
+- Use the template only for new packages. Existing packages should normally add
+  a flake wrapper and generated expression rather than copying the scaffold.
+- Commit `flake.lock` for real external packages. The repository examples use
+  `--no-write-lock-file` only to avoid fixture lock churn.
+- Current reusable API targets `x86_64-linux` hosts and the
+  `ghc9103Aarch64Linux` target package set.
+
+## New Package Template
 
 Create a scaffold package with:
 
@@ -127,8 +205,7 @@ nix build . -L
 
 The template includes an executable, a small library, an `aeson` TH splice as
 an example real TH dependency, and `nix/generated/cross-app.nix`. If the Cabal
-file changes,
-regenerate the package expression with:
+file changes, regenerate the package expression with:
 
 ```bash
 cabal2nix . > nix/generated/cross-app.nix
