@@ -25,16 +25,33 @@
 +      ; writeTcRef th_topdecls_th_var []
 --- a/compiler/GHC/Tc/Types.hs
 +++ b/compiler/GHC/Tc/Types.hs
-@@ -179 +179,2 @@ import Data.Typeable ( TypeRep )
--import Data.Maybe    ( mapMaybe )
-+import Data.Maybe    ( mapMaybe )
-+import qualified Language.Haskell.TH as TH
-@@ -567 +568,4 @@ data TcGblEnv
+@@ -567 +567,4 @@ data TcGblEnv
 -        -- ^ Top-level declarations from addTopDecls
 +        -- ^ Top-level declarations from addTopDecls
 +
-+        tcg_th_topdecls_th :: TcRef [TH.Dec],
++        tcg_th_topdecls_th :: TcRef [Dec],
 +        -- ^ Raw Template Haskell declarations from addTopDecls
+--- a/compiler/GHC/Tc/Types/TH.hs
++++ b/compiler/GHC/Tc/Types/TH.hs
+@@ -3,7 +3,8 @@ module GHC.Tc.Types.TH (
+   , SpliceOrBracket(..)
+   , ThStage(..)
+   , PendingStuff(..)
+   , ThLevel
++  , Dec
+   , topStage
+   , topAnnStage
+   , topSpliceStage
+@@ -20,7 +21,8 @@ import GHC.Prelude
+ import GHC.Tc.Types.TcRef
+ import GHC.Tc.Types.Constraint
+ import GHC.Hs.Expr ( PendingTcSplice, PendingRnSplice )
+-
++type Dec = TH.Dec
++
+ ---------------------------
+ -- Template Haskell stages and levels
+ ---------------------------
 --- a/compiler/GHC/Tc/Utils/Monad.hs
 +++ b/compiler/GHC/Tc/Utils/Monad.hs
 @@ -265 +265,2 @@ initTc hsc_env hsc_src keep_rn_syntax mod loc do_this

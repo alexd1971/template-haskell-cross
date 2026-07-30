@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -- | Validate Nix-derived host package names against Cabal setup-config.
 module ThCross.NixTools.Validate
   ( validateCabalComponentContext
@@ -12,6 +14,7 @@ import Distribution.Types.ComponentLocalBuildInfo
   , componentPackageDeps
   )
 import Distribution.Types.ComponentName (showComponentName)
+import Distribution.Types.LocalBuildInfo (LocalBuildInfo)
 import Distribution.Types.MungedPackageId
   ( MungedPackageId
   , mungedName
@@ -22,6 +25,9 @@ import Distribution.Types.UnitId
   ( UnitId
   , unUnitId
   )
+#if MIN_VERSION_Cabal(3,14,0)
+import Distribution.Utils.Path (makeSymbolicPath)
+#endif
 import System.Directory (createDirectoryIfMissing)
 import System.Exit (die)
 import System.FilePath ((</>))
@@ -54,7 +60,7 @@ validateCabalComponentContext expectedPackagesFile excludedPackagesFile outputDi
 
 cabalComponentDependencies :: IO [(String, [ComponentDependency])]
 cabalComponentDependencies = do
-  localBuildInfo <- getPersistBuildConfig "dist"
+  localBuildInfo <- readLocalBuildInfo
   pure $
     map
       ( \component ->
@@ -63,6 +69,14 @@ cabalComponentDependencies = do
           )
       )
       (allComponentsInBuildOrder localBuildInfo)
+
+readLocalBuildInfo :: IO LocalBuildInfo
+readLocalBuildInfo =
+#if MIN_VERSION_Cabal(3,14,0)
+  getPersistBuildConfig Nothing (makeSymbolicPath "dist")
+#else
+  getPersistBuildConfig "dist"
+#endif
 
 componentDependency :: (UnitId, MungedPackageId) -> ComponentDependency
 componentDependency (unitId, packageId) =

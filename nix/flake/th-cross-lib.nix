@@ -1,4 +1,4 @@
-{ pkgs, hs, crossGhc9103Aarch64 }:
+{ pkgs, hs }:
 
 let
   # Read the native plugin package metadata in the same vocabulary GHC uses.
@@ -54,35 +54,37 @@ let
   mkCrossHaskellPkgs =
     { crossPkgs
     , crossGhc
+    , profile
     }:
     crossPkgs.callPackage (pkgs.path + "/pkgs/development/haskell-modules") {
       haskellLib = pkgs.haskell.lib.compose;
-      buildHaskellPackages = pkgs.haskell.packages.ghc9103;
+      buildHaskellPackages = pkgs.haskell.packages.${profile.packageSetName};
       ghc = crossGhc;
       compilerConfig =
         crossPkgs.callPackage
-          (pkgs.path + "/pkgs/development/haskell-modules/configuration-ghc-9.10.x.nix")
+          (pkgs.path + "/pkgs/development/haskell-modules/${profile.compilerConfigFile}")
           {
             haskellLib = pkgs.haskell.lib.compose;
           };
     };
 
   mkWorkerWithHostPackages =
+    compiler:
     hostPackageNames:
     if hostPackageNames == [ ] then
       {
-        worker = "${hs.hostGhc9103HaskellPkgs.th-host-worker}/bin/th-host-worker";
-        hostGhcPkg = "${hs.patchedNativeGhc9103}/bin/ghc-pkg";
+        worker = "${compiler.hostWorker}/bin/th-host-worker";
+        hostGhcPkg = "${compiler.patchedGhc}/bin/ghc-pkg";
       }
     else
       let
         hostGhcWithPackages =
-          hs.hostGhc9103HaskellPkgs.ghcWithPackages
+          compiler.hostHaskellPkgs.ghcWithPackages
             (hpkgs: map (packageName: hpkgs.${packageName}) hostPackageNames);
       in
       {
         worker = "${pkgs.runCommand
-          "th-host-worker-ghc9103-with-host-packages"
+          "th-host-worker-ghc${pkgs.lib.replaceStrings [ "." ] [ "" ] compiler.version}-with-host-packages"
         {
           nativeBuildInputs = [
             pkgs.makeWrapper
@@ -91,14 +93,15 @@ let
         ''
           mkdir -p "$out/bin"
           makeWrapper \
-            ${hs.hostGhc9103HaskellPkgs.th-host-worker}/bin/.th-host-worker-wrapped \
+            ${compiler.hostWorker}/bin/.th-host-worker-wrapped \
             "$out/bin/th-host-worker" \
-            --set TH_HOST_GHC_LIBDIR "${hostGhcWithPackages}/lib/ghc-9.10.3/lib"
+            --set TH_HOST_GHC_LIBDIR "${hostGhcWithPackages}/lib/ghc-${compiler.version}/lib"
         ''}/bin/th-host-worker";
         hostGhcPkg = "${hostGhcWithPackages}/bin/ghc-pkg";
       };
 
   cabalContextValidationScript =
+    nixTools:
     expectedHostPackageNames:
     excludedPackageNames:
     ''
@@ -116,7 +119,7 @@ template-haskell
 ${pkgs.lib.concatStringsSep "\n" excludedPackageNames}
 EOF
 
-      ${hs.nixTools}/bin/th-cross-nix-tool \
+      ${nixTools}/bin/th-cross-nix-tool \
         validate-cabal-component-context \
         "$expected_packages" \
         "$excluded_packages" \
@@ -124,13 +127,14 @@ EOF
     '';
 
   generatePluginConfig =
-    { worker
+    { nixTools
+    , worker
     , hostGhcPkg
     , targetGhcPkg
     , hostPackageNames
     }:
     ''
-      ${hs.nixTools}/bin/th-cross-nix-tool \
+      ${nixTools}/bin/th-cross-nix-tool \
         plugin-config \
         th-cross-plugin-options \
         "${worker}" \
@@ -151,6 +155,7 @@ EOF
   mkWorkerEnabledPackageSet =
     { crossPkgs
     , crossGhc
+    , compiler
     , targetGhcPkg
     , targetPlugin
     , nativeGhcPkg
@@ -160,6 +165,7 @@ EOF
       crossHaskellPkgs =
         mkCrossHaskellPkgs {
           inherit crossPkgs crossGhc;
+          profile = hs.compilerProfiles.${compiler.packageSetName};
         };
 
       pluginLibDir = "${targetPlugin}/lib/ghc-${targetPluginGhcVersion}";
@@ -170,7 +176,7 @@ EOF
         let
           externalHostPackageNames =
             builtins.filter (packageName: packageName != args.pname) hostPackageNames;
-          workerContext = mkWorkerWithHostPackages externalHostPackageNames;
+          workerContext = mkWorkerWithHostPackages compiler externalHostPackageNames;
         in
         crossHaskellPkgs.mkDerivation
           (args // {
@@ -195,6 +201,7 @@ EOF
               # and CPP options into one config file.
               ${generatePluginConfig {
                 inherit targetGhcPkg;
+                nixTools = compiler.nixTools;
                 hostPackageNames = externalHostPackageNames;
                 inherit (workerContext) worker hostGhcPkg;
               }}
@@ -203,7 +210,7 @@ EOF
             postConfigure =
               pkgs.lib.concatStringsSep "\n" [
                 (args.postConfigure or "")
-                (cabalContextValidationScript externalHostPackageNames [ args.pname ])
+                (cabalContextValidationScript compiler.nixTools externalHostPackageNames [ args.pname ])
               ];
           });
 
@@ -219,7 +226,7 @@ EOF
             postConfigure =
               pkgs.lib.concatStringsSep "\n" [
                 (args.postConfigure or "")
-                (cabalContextValidationScript expectedHostPackageNames [ args.pname ])
+                (cabalContextValidationScript compiler.nixTools expectedHostPackageNames [ args.pname ])
               ];
           });
 
@@ -257,19 +264,53 @@ EOF
         ;
     };
 
-  ghc9103Aarch64Linux =
-    mkWorkerEnabledPackageSet {
+  targetProfiles = {
+    "aarch64-linux" = {
       crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
-      crossGhc = crossGhc9103Aarch64;
-      targetGhcPkg = "${crossGhc9103Aarch64}/bin/aarch64-unknown-linux-gnu-ghc-pkg";
-      targetPlugin = hs.targetGhc9103HaskellPkgs.th-cross-plugin;
-      nativeGhcPkg = "${pkgs.haskell.compiler.ghc9103}/bin/ghc-pkg";
-      targetPluginGhcVersion = "9.10.3";
+      targetName = "aarch64-linux";
+      targetTriple = "aarch64-unknown-linux-gnu";
     };
+  };
+
+  mkCrossFor =
+    { ghcVersion
+    , target ? "aarch64-linux"
+    }:
+    let
+      compiler = hs.mkCompilerForVersion ghcVersion;
+      compilerProfile = hs.compilerProfiles.${compiler.packageSetName};
+      targetProfile = targetProfiles.${target}
+        or (throw "Unsupported TH cross target ${target}; add it to targetProfiles in nix/flake/th-cross-lib.nix");
+      inherit (targetProfile) crossPkgs targetName targetTriple;
+      crossGhc = import ./mk-cross-ghc.nix {
+        profile = compilerProfile;
+        inherit crossPkgs targetName targetTriple;
+        bootPkgs = pkgs.haskell.packages.${compiler.packageSetName};
+      };
+    in
+    mkWorkerEnabledPackageSet {
+      inherit crossPkgs crossGhc compiler;
+      targetGhcPkg = "${crossGhc}/bin/${targetTriple}-ghc-pkg";
+      targetPlugin = compiler.targetPlugin;
+      nativeGhcPkg = "${pkgs.haskell.compiler.${compiler.packageSetName}}/bin/ghc-pkg";
+      targetPluginGhcVersion = compiler.version;
+    };
+
+  mkAarch64LinuxForVersion = version:
+    mkCrossFor {
+      ghcVersion = version;
+      target = "aarch64-linux";
+    };
+
+  ghc9103Aarch64Linux =
+    mkAarch64LinuxForVersion "9.10.3";
 in
 {
   inherit
     ghc9103Aarch64Linux
+    targetProfiles
+    mkCrossFor
+    mkAarch64LinuxForVersion
     hostPackageNamesFromCabalDeps
     mkWorkerWithHostPackages
     mkWorkerEnabledPackageSet

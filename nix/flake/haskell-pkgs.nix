@@ -1,92 +1,145 @@
 { pkgs }:
 
 let
-  # This file contains only Haskell package-set wiring. Cross-GHC experiments
-  # live under `experiments/`.
+  # This file contains only Haskell package-set wiring. Each supported compiler
+  # version is described by an explicit profile in `ghc-profiles.nix`.
+  compilerProfiles = import ./ghc-profiles.nix;
 
   mkHaskellPackageSet =
     { ghc
     , compilerConfig
+    , buildHaskellPackages ? pkgs.haskell.packages.ghc9103
     , overrides
     }:
     pkgs.callPackage (pkgs.path + "/pkgs/development/haskell-modules") {
       haskellLib = pkgs.haskell.lib.compose;
-      buildHaskellPackages = pkgs.haskell.packages.ghc9103;
+      inherit buildHaskellPackages;
       inherit ghc compilerConfig overrides;
     };
 
-  ghc9103CompilerConfig =
+  mkCompilerConfig = compilerConfigFile:
     pkgs.callPackage
-      (pkgs.path + "/pkgs/development/haskell-modules/configuration-ghc-9.10.x.nix")
+      (pkgs.path + "/pkgs/development/haskell-modules/${compilerConfigFile}")
       {
         haskellLib = pkgs.haskell.lib.compose;
       };
 
-  # Native GHC 9.10.3 with the minimal export-list patch needed by the raw
-  # Template Haskell AST worker path.
-  patchedNativeGhc9103 =
-    pkgs.haskell.compiler.ghc9103.overrideAttrs (old: {
-      patches = (old.patches or []) ++ [
-        ../patches/ghc-9.10.3-export-runth.patch
-      ];
-    });
-
-  # Target-side package set. This is still native x86_64-linux in the current
-  # flake, but it models the side that becomes the cross target package set.
-  targetGhc9103HaskellPkgs = pkgs.haskell.packages.ghc9103.override {
-    overrides = selfH: superH: {
-      th-cross-protocol =
-        pkgs.callPackage ../th-cross-protocol.nix {
-          callPackage = selfH.callPackage;
-          haskellLib = pkgs.haskell.lib;
-          hostGhc = selfH.ghc;
-        };
-      th-cross-plugin =
-        pkgs.callPackage ../th-cross-plugin.nix {
-          callPackage = selfH.callPackage;
-          haskellLib = pkgs.haskell.lib;
-          hostGhc = selfH.ghc;
-        };
-      th-target-context-consumer =
-        selfH.callPackage ../../examples/target-context/nix/generated/th-target-context-consumer.nix { };
+  jailbreakHaskellLib =
+    pkgs.haskell.lib // {
+      overrideCabal = drv: f:
+        pkgs.haskell.lib.doJailbreak (pkgs.haskell.lib.overrideCabal drv f);
     };
-  };
 
-  hostGhc9103HaskellPkgs =
-    mkHaskellPackageSet {
-      ghc = patchedNativeGhc9103;
-      compilerConfig = ghc9103CompilerConfig;
-      overrides = selfH: superH: {
-        # Shared protocol package used by both worker and plugin. The public
-        # target-side plugin remains `targetGhc9103HaskellPkgs.th-cross-plugin`.
-        th-cross-protocol =
-          pkgs.callPackage ../th-cross-protocol.nix {
-            callPackage = selfH.callPackage;
-            haskellLib = pkgs.haskell.lib;
-            hostGhc = patchedNativeGhc9103;
-          };
-        th-cross-plugin =
-          pkgs.callPackage ../th-cross-plugin.nix {
-            callPackage = selfH.callPackage;
-            haskellLib = pkgs.haskell.lib;
-            hostGhc = selfH.ghc;
-          };
-        th-host-worker =
-          pkgs.callPackage ../th-host-worker.nix {
-            callPackage = selfH.callPackage;
-            haskellLib = pkgs.haskell.lib;
-            hostGhc = patchedNativeGhc9103;
-            hostGhcLibDir = "${patchedNativeGhc9103}/lib/ghc-9.10.3/lib";
+  mkCompilerFromProfile = profile:
+    let
+      haskellLib =
+        if profile.jailbreak then jailbreakHaskellLib else pkgs.haskell.lib;
+
+      compiler = pkgs.haskell.compiler.${profile.packageSetName};
+      buildHaskellPackages = pkgs.haskell.packages.${profile.packageSetName};
+      compilerConfig = mkCompilerConfig profile.compilerConfigFile;
+
+      patchedGhc =
+        compiler.overrideAttrs (old: {
+          patches = (old.patches or []) ++ profile.workerPatches;
+        });
+
+      targetHaskellPkgs = buildHaskellPackages.override {
+        overrides = selfH: superH:
+          {
+            th-cross-protocol =
+              pkgs.callPackage ../th-cross-protocol.nix {
+                callPackage = selfH.callPackage;
+                inherit haskellLib;
+                hostGhc = selfH.ghc;
+              };
+            th-cross-plugin =
+              pkgs.callPackage ../th-cross-plugin.nix {
+                callPackage = selfH.callPackage;
+                inherit haskellLib;
+                hostGhc = selfH.ghc;
+              };
+          }
+          // pkgs.lib.optionalAttrs profile.includeTargetContextConsumer {
+            th-target-context-consumer =
+              selfH.callPackage ../../examples/target-context/nix/generated/th-target-context-consumer.nix { };
           };
       };
+
+      hostHaskellPkgs =
+        mkHaskellPackageSet {
+          ghc = patchedGhc;
+          inherit compilerConfig buildHaskellPackages;
+          overrides = selfH: superH: {
+            # Shared protocol package used by both worker and plugin. The public
+            # target-side plugin remains `targetHaskellPkgs.th-cross-plugin`.
+            th-cross-protocol =
+              pkgs.callPackage ../th-cross-protocol.nix {
+                callPackage = selfH.callPackage;
+                inherit haskellLib;
+                hostGhc = patchedGhc;
+              };
+            th-cross-plugin =
+              pkgs.callPackage ../th-cross-plugin.nix {
+                callPackage = selfH.callPackage;
+                inherit haskellLib;
+                hostGhc = selfH.ghc;
+              };
+            th-host-worker =
+              pkgs.callPackage ../th-host-worker.nix {
+                callPackage = selfH.callPackage;
+                inherit haskellLib;
+                hostGhc = patchedGhc;
+                hostGhcLibDir = "${patchedGhc}/lib/ghc-${patchedGhc.version}/lib";
+              };
+          };
+        };
+
+      targetGhcWithPlugin = targetHaskellPkgs.ghcWithPackages (hpkgs: [
+        hpkgs.th-cross-plugin
+      ]);
+
+      nixTools =
+        buildHaskellPackages.callPackage ../th-cross-nix-tools.nix { };
+    in
+    {
+      inherit patchedGhc hostHaskellPkgs targetHaskellPkgs targetGhcWithPlugin nixTools;
+
+      inherit (profile) version packageSetName compilerConfigFile workerPatches crossPatches;
+
+      hostWorker = hostHaskellPkgs.th-host-worker;
+      targetProtocol = targetHaskellPkgs.th-cross-protocol;
+      targetPlugin = targetHaskellPkgs.th-cross-plugin;
     };
 
-  nixTools = pkgs.haskell.packages.ghc9103.callPackage ../th-cross-nix-tools.nix { };
+  compilerProfileForVersion = version:
+    let
+      matches =
+        pkgs.lib.filterAttrs (_name: profile: profile.version == version) compilerProfiles;
+      names = builtins.attrNames matches;
+    in
+    if names == []
+    then throw "Unsupported GHC version ${version}; add a profile in nix/flake/ghc-profiles.nix"
+    else matches.${builtins.head names};
+
+  mkCompilerForVersion = version:
+    mkCompilerFromProfile (compilerProfileForVersion version);
+
+  compilers = pkgs.lib.mapAttrs (_name: mkCompilerFromProfile) compilerProfiles;
+
+  nixTools = compilers.ghc9103.nixTools;
 in
 {
-  inherit patchedNativeGhc9103 hostGhc9103HaskellPkgs targetGhc9103HaskellPkgs nixTools;
+  inherit
+    compilerProfiles
+    mkCompilerFromProfile
+    mkCompilerForVersion
+    compilers
+    nixTools
+    ;
 
-  targetGhc9103WithPlugin = targetGhc9103HaskellPkgs.ghcWithPackages (hpkgs: [
-    hpkgs.th-cross-plugin
-  ]);
+  patchedNativeGhc9103 = compilers.ghc9103.patchedGhc;
+  hostGhc9103HaskellPkgs = compilers.ghc9103.hostHaskellPkgs;
+  targetGhc9103HaskellPkgs = compilers.ghc9103.targetHaskellPkgs;
+  targetGhc9103WithPlugin = compilers.ghc9103.targetGhcWithPlugin;
 }

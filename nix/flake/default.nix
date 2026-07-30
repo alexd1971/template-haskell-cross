@@ -19,8 +19,12 @@ in
       # `hs` contains the host-side and target-side Haskell package sets.
       hs = import ./haskell-pkgs.nix { inherit pkgs; };
 
-      crossGhc9103Aarch64 = import ./cross-ghc/ghc9103-aarch64.nix {
-        inherit pkgs;
+      crossGhc9103Aarch64 = import ./mk-cross-ghc.nix {
+        profile = hs.compilerProfiles.ghc9103;
+        crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+        bootPkgs = pkgs.haskell.packages.ghc9103;
+        targetName = "aarch64-linux";
+        targetTriple = "aarch64-unknown-linux-gnu";
       };
     in
     {
@@ -50,12 +54,12 @@ in
   lib = forAllSystems (pkgs:
     let
       hs = import ./haskell-pkgs.nix { inherit pkgs; };
-      crossGhc9103Aarch64 = import ./cross-ghc/ghc9103-aarch64.nix {
-        inherit pkgs;
-      };
     in
-    import ./th-cross-lib.nix {
-      inherit pkgs hs crossGhc9103Aarch64;
+    (import ./th-cross-lib.nix {
+      inherit pkgs hs;
+    })
+    // {
+      inherit (hs) compilerProfiles mkCompilerFromProfile mkCompilerForVersion compilers;
     });
 
   devShells = forAllSystems (pkgs:

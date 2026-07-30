@@ -35,7 +35,7 @@ P4.
 
 ## P1 — Force `HAVE_INTERNAL_INTERPRETER`
 
-**File**: `nix/patches/ghc-9.10.3-force-compiler-internal-interpreter.patch`
+**File**: `nix/patches/force-compiler-internal-interpreter.patch`
 
 **What**: Changes `compiler/ghc.cabal.in` to define
 `-DHAVE_INTERNAL_INTERPRETER` unconditionally instead of gating behind
@@ -79,7 +79,7 @@ real fix requires design work in GHC upstream.
 
 ## P2 — `--export-dynamic` on stage0 `ghc-bin`
 
-**Where**: Hadrian flag in `nix/flake/cross-ghc/ghc9103-aarch64.nix`:
+**Where**: Hadrian flag in `nix/flake/mk-cross-ghc.nix`:
 
 ```
 stage0.ghc-bin.ghc.link.opts += -optl-Wl,--export-dynamic
@@ -104,7 +104,7 @@ flag through Hadrian.  This should be a one-line Hadrian change.
 
 ## P3 — Empty `ThModFinalizers` are no-ops
 
-**File**: `nix/patches/ghc-9.10.3-ignore-empty-th-finalizers.patch`
+**File**: `nix/patches/ignore-empty-th-finalizers.patch`
 
 **What**: Adds a guard at the top of
 `GHC.Tc.Utils.Monad.addModFinalizersWithLclEnv`:
@@ -134,7 +134,7 @@ submitted independently of the TH cross work.
 
 ## P4 — Export raw TH runners and capture raw `addTopDecls`
 
-**File**: `nix/patches/ghc-9.10.3-export-runth.patch`
+**File**: `nix/patches/export-runth.patch`
 
 **Applies to**: native patched worker GHC (`packages.*.patched-ghc9103`), not
 the aarch64 cross-GHC derivation.

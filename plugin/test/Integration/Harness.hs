@@ -172,9 +172,9 @@ ghcArgs testEnv testBuildDir spec =
 
 cabalExecArgs :: TestEnv -> FilePath -> FilePath -> [String]
 cabalExecArgs testEnv ghc ghcPkg =
-  cabalGlobalArgs (testProjectRoot testEnv)
+  cabalGlobalArgs testEnv
     <> ["exec"]
-    <> cabalCommandArgs (testProjectRoot testEnv)
+    <> cabalCommandArgs testEnv
     <> cabalCompilerArgs ghc ghcPkg
 
 checkExpectedExit :: String -> ExpectedExit -> ExitCode -> String -> String -> Assertion
@@ -319,18 +319,18 @@ hGetContentsStrict handle = do
   text <- hGetContents handle
   length text `seq` pure text
 
-cabalGlobalArgs :: FilePath -> [String]
-cabalGlobalArgs projectRoot =
+cabalGlobalArgs :: TestEnv -> [String]
+cabalGlobalArgs testEnv =
   [ "--store-dir"
-  , takeDirectory projectRoot </> ".cabal-store-nix"
+  , takeDirectory (testProjectRoot testEnv) </> ".cabal-store-nix-" <> cabalPathSuffix testEnv
   ]
 
-cabalCommandArgs :: FilePath -> [String]
-cabalCommandArgs projectRoot =
+cabalCommandArgs :: TestEnv -> [String]
+cabalCommandArgs testEnv =
   [ "--project-dir"
-  , projectRoot
+  , testProjectRoot testEnv
   , "--builddir"
-  , "dist-newstyle-nix"
+  , "dist-newstyle-nix-" <> cabalPathSuffix testEnv
   ]
 
 cabalCompilerArgs :: FilePath -> FilePath -> [String]
@@ -351,3 +351,12 @@ sanitizePathSegment =
 
     allowed =
       ['a' .. 'z'] <> ['A' .. 'Z'] <> ['0' .. '9'] <> "-_."
+
+cabalPathSuffix :: TestEnv -> FilePath
+cabalPathSuffix testEnv =
+  sanitizePathSegment $
+    case testCompileRunner testEnv of
+      CabalExecGhc ghc _ ->
+        ghc
+      DirectGhc ghc ->
+        ghc

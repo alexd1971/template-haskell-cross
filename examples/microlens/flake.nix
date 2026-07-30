@@ -8,7 +8,13 @@
   outputs = { th-cross, ... }:
     let
       system = "x86_64-linux";
-      thCross = th-cross.lib.${system}.ghc9103Aarch64Linux;
+      ghcVersion =
+        let value = builtins.getEnv "TH_CROSS_GHC_VERSION";
+        in if value == "" then "9.10.3" else value;
+      target =
+        let value = builtins.getEnv "TH_CROSS_TARGET";
+        in if value == "" then "aarch64-linux" else value;
+      thCross = th-cross.lib.${system}.mkCrossFor { inherit ghcVersion target; };
     in
     {
       packages.${system} = {

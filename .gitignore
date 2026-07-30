@@ -1,6 +1,8 @@
 dist-newstyle/
 dist-newstyle-nix/
+dist-newstyle-nix-*/
 .cabal-store-nix/
+.cabal-store-nix-*/
 .agents/
 .codex/
 *.hi

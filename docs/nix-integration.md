@@ -12,17 +12,17 @@ The active path has three compiler/package roles:
 
 ```text
 host worker:
-  native patched GHC 9.10.3
+  native patched GHC from the selected compiler profile
   th-host-worker
   host-side TH dependencies
 
 consumer plugin:
-  native GHC 9.10.3
+  native GHC from the selected compiler profile
   th-cross-plugin shared library loaded into the compiler process
   th-cross-protocol dependency
 
 target package set:
-  patched aarch64-linux cross-GHC 9.10.3
+  patched aarch64-linux cross-GHC from the selected compiler profile
   target dependencies and package DBs
 ```
 
@@ -51,24 +51,32 @@ checks.${system}.target-ghc9103-target-context-package
 apps.${system}.regen-cabal-nix
 devShells.${system}.default
 lib.${system}.ghc9103Aarch64Linux
+lib.${system}.mkCrossFor
+lib.${system}.mkAarch64LinuxForVersion
 ```
 
 `target-ghc9103-protocol` contains the shared binary protocol and splice-key
 types used by both the plugin and the worker.
 
 `patched-ghc9103` is the native worker compiler. It applies
-`ghc-9.10.3-export-runth.patch`, which exports raw TH runner functions and
+`export-runth.patch`, which exports raw TH runner functions and
 captures raw `addTopDecls` payloads.
+
+The compatibility outputs above point at the GHC 9.10.3 profile. New consumer
+flakes should prefer `lib.${system}.mkCrossFor`, which accepts `ghcVersion` and
+`target`.
 
 `cross-ghc9103-aarch64-linux` is the patched aarch64 cross compiler used by the
 package-level consumer builds. Its cross-specific patches are documented in
 `docs/ghc-cross-patches.md`.
 
-`lib.${system}.ghc9103Aarch64Linux` is the reusable API intended for external
-consumer flakes. It exposes:
+`lib.${system}.mkCrossFor` is the reusable API intended for external consumer
+flakes. `lib.${system}.mkAarch64LinuxForVersion` and
+`lib.${system}.ghc9103Aarch64Linux` are compatibility aliases for the
+`aarch64-linux` target. The API exposes:
 
 - `crossHaskellPkgs`: target Haskell package set built around the patched
-  aarch64-linux GHC 9.10.3.
+  aarch64-linux GHC for the selected compiler profile.
 - `callPackageWithWorker`: call a cabal2nix-generated package while injecting
   the TH cross plugin, worker, plugin config, package DB mapping, source dirs,
   CPP options, and context validation.
@@ -92,7 +100,10 @@ package through the exported API:
   outputs = { nixpkgs, th-cross, ... }:
     let
       system = "x86_64-linux";
-      thCross = th-cross.lib.${system}.ghc9103Aarch64Linux;
+      thCross = th-cross.lib.${system}.mkCrossFor {
+        ghcVersion = "9.10.3";
+        target = "aarch64-linux";
+      };
     in
     {
       packages.${system}.default =
@@ -140,7 +151,13 @@ Add a flake that delegates the package derivation to `th-cross`:
   outputs = { th-cross, ... }:
     let
       system = "x86_64-linux";
-      thCross = th-cross.lib.${system}.ghc9103Aarch64Linux;
+      ghcVersion =
+        let value = builtins.getEnv "TH_CROSS_GHC_VERSION";
+        in if value == "" then "9.10.3" else value;
+      target =
+        let value = builtins.getEnv "TH_CROSS_TARGET";
+        in if value == "" then "aarch64-linux" else value;
+      thCross = th-cross.lib.${system}.mkCrossFor { inherit ghcVersion target; };
     in
     {
       packages.${system}.default =
@@ -153,6 +170,7 @@ Build:
 
 ```bash
 nix build --no-write-lock-file . -L
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file . -L
 ```
 
 If dependency resolution looks wrong, first inspect the Cabal context that the
@@ -177,12 +195,14 @@ Operational rules:
   components, `hs-source-dirs`, or Cabal conditionals.
 - Keep TH generator dependencies in normal `build-depends`; the wrapper derives
   the host worker package environment from the cabal2nix metadata.
+- The internal `th-cross-nix-tool` is built from the selected compiler profile
+  because its context validator reads Cabal's `dist/setup-config`.
 - Use the template only for new packages. Existing packages should normally add
   a flake wrapper and generated expression rather than copying the scaffold.
 - Commit `flake.lock` for real external packages. The repository examples use
   `--no-write-lock-file` only to avoid fixture lock churn.
-- Current reusable API targets `x86_64-linux` hosts and the
-  `ghc9103Aarch64Linux` target package set.
+- Current reusable API targets `x86_64-linux` hosts. Select the target and GHC
+  compiler profile with `mkCrossFor`.
 
 ## New Package Template
 
@@ -229,6 +249,15 @@ nix build --no-write-lock-file ./examples/aeson
 nix build --no-write-lock-file ./examples/microlens
 nix build --no-write-lock-file ./examples/target-context
 nix build --no-write-lock-file ./examples/executable
+```
+
+To evaluate examples with another compiler profile:
+
+```bash
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/aeson -L
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/microlens -L
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/target-context -L
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/executable -L
 ```
 
 ## Plugin Config
@@ -315,6 +344,11 @@ th-cross-nix-tool validate-cabal-component-context \
   "$out/nix-support"
 ```
 
+The helper executable is built from the selected compiler profile, not from a
+fixed GHC. This matters because Cabal's persisted `setup-config` is versioned by
+the Cabal library used by `Setup configure`; reading it with a helper linked
+against a different Cabal version fails before validation can run.
+
 The standalone probe exposes the same data:
 
 ```bash
@@ -337,6 +371,15 @@ nix build --no-write-lock-file ./examples/target-context -L
 nix build --no-write-lock-file ./examples/microlens -L
 nix build --no-write-lock-file ./examples/aeson -L
 nix build --no-write-lock-file ./examples/executable -L
+```
+
+With an explicit GHC version:
+
+```bash
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/target-context -L
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/microlens -L
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/aeson -L
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/executable -L
 ```
 
 Coverage:

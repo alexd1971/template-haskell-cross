@@ -16,6 +16,7 @@ main :: IO ()
 main = do
   projectRoot <- findProjectRoot
   workerPath <- requireEnv "TH_HOST_WORKER" "run integration tests through nix develop and th-cross-test"
+  testGhc <- lookupEnvDefault "TH_CROSS_TEST_GHC" "ghc-9.10.3"
   fixturesDir <- makeAbsolute (projectRoot </> "plugin" </> "test" </> "fixtures")
   let testEnv =
         TestEnv
@@ -23,7 +24,7 @@ main = do
           , testFixturesDir = fixturesDir
           , testWorkerPath = workerPath
           , testHostGhcLibDir = ""
-          , testCompileRunner = DirectGhc "ghc-9.10.3"
+          , testCompileRunner = DirectGhc testGhc
           }
   defaultMain
     ( testGroup
@@ -40,3 +41,8 @@ requireEnv name hint = do
     Nothing -> do
       putStrLn (name <> " is not set; " <> hint <> ".")
       exitFailure
+
+lookupEnvDefault :: String -> String -> IO String
+lookupEnvDefault name fallback = do
+  value <- lookupEnv name
+  pure (maybe fallback id value)
