@@ -18,6 +18,6 @@
     in
     {
       packages.${system}.default =
-        thCross.callPackageWithWorker ./nix/generated/th-executable-consumer.nix;
+        thCross.buildPackage ./nix/generated/th-executable-consumer.nix;
     };
 }

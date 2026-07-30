@@ -93,7 +93,7 @@ still needs, except where explicitly recorded for a version:
 - `th-host-worker` build;
 - integration tests for raw TH splices;
 - patched cross-GHC build for at least one target;
-- example package build through `callPackageWithWorker`.
+- example package build through `buildPackage`.
 
 The Cabal bounds currently allow the validated compiler range:
 

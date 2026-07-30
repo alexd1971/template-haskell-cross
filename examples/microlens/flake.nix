@@ -19,10 +19,10 @@
     {
       packages.${system} = {
         default =
-          thCross.callPackageWithWorker ./nix/generated/th-microlens-consumer.nix;
+          thCross.buildPackage ./nix/generated/th-microlens-consumer.nix;
 
         cabal-context-probe =
-          thCross.callPackageCabalContextProbe ./nix/generated/th-microlens-consumer.nix;
+          thCross.checkCabalContext ./nix/generated/th-microlens-consumer.nix;
       };
     };
 }

@@ -77,15 +77,21 @@ flakes. `lib.${system}.mkAarch64LinuxForVersion` and
 
 - `crossHaskellPkgs`: target Haskell package set built around the patched
   aarch64-linux GHC for the selected compiler profile.
-- `callPackageWithWorker`: call a cabal2nix-generated package while injecting
+- `buildPackage`: build a cabal2nix-generated package while injecting
   the TH cross plugin, worker, plugin config, package DB mapping, source dirs,
   CPP options, and context validation.
-- `callPackageCabalContextProbe`: build only the Cabal context validation probe
-  for a package.
+- `checkCabalContext`: build only the Cabal context validation probe for a
+  package.
 - `mkDerivationWithWorker`: lower-level `mkDerivation` override for package
   definitions that are not loaded from a cabal2nix file.
 
+`callPackageWithWorker` and `callPackageCabalContextProbe` remain available as
+compatibility names for the lower-level implementation.
+
 ## External Consumer Flake
+
+For a step-by-step guide for existing packages, see
+`docs/external-project-integration.md`.
 
 A consumer package flake can use this repository as an input and build a target
 package through the exported API:
@@ -107,7 +113,7 @@ package through the exported API:
     in
     {
       packages.${system}.default =
-        thCross.callPackageWithWorker ./generated/my-package.nix;
+        thCross.buildPackage ./generated/my-package.nix;
     };
 }
 ```
@@ -161,7 +167,7 @@ Add a flake that delegates the package derivation to `th-cross`:
     in
     {
       packages.${system}.default =
-        thCross.callPackageWithWorker ./nix/generated/my-package.nix;
+        thCross.buildPackage ./nix/generated/my-package.nix;
     };
 }
 ```
@@ -178,7 +184,7 @@ integration sees:
 
 ```nix
 packages.${system}.cabal-context-probe =
-  thCross.callPackageCabalContextProbe ./nix/generated/my-package.nix;
+  thCross.checkCabalContext ./nix/generated/my-package.nix;
 ```
 
 Then run:
@@ -240,7 +246,7 @@ directory contains its own `flake.nix` with:
 inputs.th-cross.url = "path:../..";
 ```
 
-and builds its package through `thCross.callPackageWithWorker`.
+and builds its package through `thCross.buildPackage`.
 
 They can be evaluated like external flakes without writing fixture lock files:
 

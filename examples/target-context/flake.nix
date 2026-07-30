@@ -18,6 +18,6 @@
     in
     {
       packages.${system}.default =
-        thCross.callPackageWithWorker ./nix/generated/th-target-context-consumer.nix;
+        thCross.buildPackage ./nix/generated/th-target-context-consumer.nix;
     };
 }

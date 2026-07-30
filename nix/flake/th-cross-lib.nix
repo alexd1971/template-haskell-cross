@@ -252,6 +252,10 @@ EOF
         crossHaskellPkgs.callPackage packageFile {
           mkDerivation = mkCabalContextProbe expectedHostPackageNames;
         };
+
+      buildPackage = callPackageWithWorker;
+
+      checkCabalContext = callPackageCabalContextProbe;
     in
     {
       inherit
@@ -259,6 +263,8 @@ EOF
         hostPackageNamesFromCabalDeps
         mkDerivationWithWorker
         mkCabalContextProbe
+        buildPackage
+        checkCabalContext
         callPackageWithWorker
         callPackageCabalContextProbe
         ;

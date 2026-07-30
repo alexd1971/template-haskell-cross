@@ -18,6 +18,6 @@
     in
     {
       packages.${system}.default =
-        thCross.callPackageWithWorker ./nix/generated/cross-app.nix;
+        thCross.buildPackage ./nix/generated/cross-app.nix;
     };
 }
