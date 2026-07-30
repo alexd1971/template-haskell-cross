@@ -3,7 +3,12 @@
 This document tracks which GHC versions are known to work with the current raw
 Template Haskell protocol and patches.
 
-The currently validated GHC versions are 9.8.4, 9.10.3, and 9.12.4. They all
+The supported release series are expected to be GHC 9.8.x, 9.10.x, and 9.12.x.
+Patch releases within a supported series should normally keep the relevant GHC
+API shape stable, but each patch release still needs a compiler profile and a
+validation run before it is listed as validated.
+
+The currently validated patch releases are 9.8.4, 9.10.3, and 9.12.4. They all
 use the raw Template Haskell protocol and the same public flake API.
 
 ## Current Matrix
@@ -14,6 +19,33 @@ use the raw Template Haskell protocol and the same public flake API.
 | 9.10.3 | OK | Compatible | Works, integration retested | All examples work | Supported |
 | 9.12.4 | OK | Compatible | Works, integration retested | All examples work | Supported |
 | 9.14.1 | Needs P4 adaptation | Changed `GHC.Tc.Types.TH` | Not checked | Not checked | Candidate |
+
+## Supported Series
+
+| Series | Status | Validated patch releases |
+| --- | --- | --- |
+| 9.8.x | Supported series | 9.8.4 |
+| 9.10.x | Supported series | 9.10.3 |
+| 9.12.x | Supported series | 9.12.4 |
+| 9.14.x | Not supported yet | None |
+
+The current locked nixpkgs exposes these relevant compiler attrs:
+
+| nixpkgs attr | GHC version |
+| --- | --- |
+| `haskell.compiler.ghc98` | 9.8.4 |
+| `haskell.compiler.ghc984` | 9.8.4 |
+| `haskell.compiler.ghc910` | 9.10.3 |
+| `haskell.compiler.ghc9103` | 9.10.3 |
+| `haskell.compiler.ghc912` | 9.12.3 |
+| `haskell.compiler.ghc9123` | 9.12.3 |
+| `haskell.compiler.ghc9124` | 9.12.4 |
+
+The matching `haskell.packages.*` package sets are present for the same attrs.
+`ghc98`, `ghc910`, and `ghc912` are nixpkgs aliases for concrete patch
+releases. Project profiles should prefer explicit patch-release attrs such as
+`ghc984`, `ghc9103`, and `ghc9124` so lockfile updates do not silently change
+the selected compiler.
 
 ## What Was Checked
 
@@ -71,8 +103,9 @@ ghc >= 9.8 && < 9.13
 ghc-boot >= 9.8 && < 9.13
 ```
 
-Those bounds cover GHC 9.8.4, 9.10.3, and 9.12.4. GHC 9.14.x is intentionally
-outside the range until its patch compatibility is checked and fixed.
+Those bounds cover the supported 9.8.x, 9.10.x, and 9.12.x series. GHC 9.14.x
+is intentionally outside the range until its patch compatibility is checked and
+fixed.
 
 Current remaining work:
 
