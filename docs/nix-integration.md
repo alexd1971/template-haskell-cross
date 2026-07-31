@@ -100,6 +100,9 @@ flakes. It currently accepts these target names:
 `callPackageWithWorker` and `callPackageCabalContextProbe` remain available as
 compatibility names for the lower-level implementation.
 
+Target profiles are defined in `nix/flake/target-profiles.nix`. Use that module
+to add new targets or target-specific Haskell package overrides.
+
 ## External Consumer Flake
 
 For a step-by-step guide for existing packages, see
