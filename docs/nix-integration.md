@@ -145,6 +145,23 @@ itself. As a result, target dependencies that contain TH splices are compiled
 through the same remote TH path. Final-package validation is still performed
 only by `buildPackage`/`buildPackageWith`, not for every transitive dependency.
 
+There are several important constraints in that implementation:
+
+- Automatic dependency wrapping is limited to packages that directly depend on
+  `template-haskell`. Wrapping every transitive dependency changed large
+  non-TH dependency graphs and pulled in problematic test-only packages.
+- For automatically wrapped dependencies, test and benchmark dependency fields
+  are ignored because those components are disabled in target dependency
+  builds.
+- Packages bundled with GHC, such as `bytestring`, `text`, `template-haskell`,
+  and `base`, are excluded from Cabal context validation. Cabal sees them in
+  `setup-config`, but nixpkgs may expose them as compiler package DB entries
+  rather than ordinary derivations with `pname`.
+- The current aarch64-linux target includes a local override for
+  `ansi-terminal-types-1.1.3`: its `Safe` pragmas are removed because it imports
+  `colour`, which is not a Safe module. This is reached through the
+  `aeson -> vector -> tasty` dependency graph.
+
 ## Existing Package Migration
 
 For an existing Cabal package, keep the Cabal file as the source of truth and
@@ -436,6 +453,8 @@ Coverage:
 - `th-aeson-consumer` checks deeper real-package TH from `aeson`, including
   nested records, sum types, `Maybe`, lists, custom field modifiers,
   `TaggedObject` encoding, and a local generator from the current package.
+- `th-dependency-consumer` checks a local dependency package that runs
+  `aeson` TH itself while the final consumer only uses the generated instances.
 - `th-executable-consumer` checks executable components and same-package source
   module visibility.
 

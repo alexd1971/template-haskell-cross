@@ -1,10 +1,20 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module DependencyTH
-  ( dependencyGeneratedValue
+  ( DependencyPayload (..)
+  , dependencyGeneratedValue
+  , samplePayload
   ) where
 
+import Data.Aeson.TH (defaultOptions, deriveJSON)
 import Language.Haskell.TH
+
+data DependencyPayload = DependencyPayload
+  { payloadName :: String
+  , payloadValue :: Int
+  }
+
+$(deriveJSON defaultOptions ''DependencyPayload)
 
 $( do
     let valueName = mkName "dependencyGeneratedValue"
@@ -12,3 +22,10 @@ $( do
     definition <- valD (varP valueName) (normalB [| "dependency-th" |]) []
     pure [signature, definition]
  )
+
+samplePayload :: DependencyPayload
+samplePayload =
+  DependencyPayload
+    { payloadName = dependencyGeneratedValue
+    , payloadValue = 42
+    }

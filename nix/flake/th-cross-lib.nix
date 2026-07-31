@@ -31,11 +31,81 @@ let
     "benchmarkHaskellDepends"
   ];
 
+  buildDependencyFields = [
+    "libraryHaskellDepends"
+    "executableHaskellDepends"
+  ];
+
+  # Packages shipped with GHC are already visible through the compiler package
+  # DB. nixpkgs does not always expose them as ordinary Haskell derivations with
+  # `pname`, so they are not part of the worker `ghcWithPackages` environment
+  # and should not be compared as external host dependencies.
+  compilerBundledPackageNames = [
+    "Cabal"
+    "Cabal-syntax"
+    "array"
+    "base"
+    "binary"
+    "bytestring"
+    "containers"
+    "deepseq"
+    "directory"
+    "exceptions"
+    "filepath"
+    "ghc"
+    "ghc-bignum"
+    "ghc-boot"
+    "ghc-boot-th"
+    "ghc-compact"
+    "ghc-experimental"
+    "ghc-heap"
+    "ghc-internal"
+    "ghc-platform"
+    "ghc-prim"
+    "ghc-toolchain"
+    "ghci"
+    "haskeline"
+    "hpc"
+    "integer-gmp"
+    "mtl"
+    "os-string"
+    "parsec"
+    "pretty"
+    "process"
+    "rts"
+    "semaphore-compat"
+    "stm"
+    "template-haskell"
+    "terminfo"
+    "text"
+    "time"
+    "transformers"
+    "unix"
+    "xhtml"
+  ];
+
   componentHaskellDependsFromCabalDeps =
+    fields:
     cabalDeps:
     pkgs.lib.concatMap
       (field: cabalDeps.${field} or [ ])
-      componentDependencyFields;
+      fields;
+
+  dependencyPackageNames =
+    dependencies:
+    map
+      (dependency:
+        if dependency == null then
+          null
+        else
+          dependency.pname or null)
+      dependencies;
+
+  hasBuildDependency =
+    packageName:
+    args:
+    builtins.elem packageName
+      (dependencyPackageNames (componentHaskellDependsFromCabalDeps buildDependencyFields args));
 
   # nixpkgs Haskell derivations expose their Cabal dependency fields through
   # `passthru.getCabalDeps`. Use dependency `pname`, not the full derivation
@@ -46,15 +116,14 @@ let
       (builtins.filter
         (packageName:
           packageName != null
-          && packageName != "base"
-          && packageName != "template-haskell")
+          && !(builtins.elem packageName compilerBundledPackageNames))
         (map
           (dependency:
             if dependency == null then
               null
             else
               dependency.pname)
-          (componentHaskellDependsFromCabalDeps cabalDeps)));
+          (componentHaskellDependsFromCabalDeps componentDependencyFields cabalDeps)));
 
   mkCrossHaskellPkgs =
     { crossPkgs
@@ -85,6 +154,17 @@ let
             (args // {
               enableExternalInterpreter = false;
             });
+
+        # ansi-terminal-types-1.1.3 marks modules as Safe while importing
+        # `colour`, which does not expose a Safe module. This is reached through
+        # aeson -> vector -> tasty in the target dependency graph.
+        ansi-terminal-types =
+          pkgs.haskell.lib.overrideCabal super.ansi-terminal-types (old: {
+            postPatch = (old.postPatch or "") + ''
+              sed -i '/{-# LANGUAGE Safe/d' src/System/Console/ANSI/Types.hs
+              sed -i '/{-# LANGUAGE Safe/d' src/System/Console/ANSI/Codes.hs
+            '';
+          });
       };
 
       targetOverrides =
@@ -143,8 +223,7 @@ ${pkgs.lib.concatStringsSep "\n" expectedHostPackageNames}
 EOF
 
       cat > "$excluded_packages" <<'EOF'
-base
-template-haskell
+${pkgs.lib.concatStringsSep "\n" compilerBundledPackageNames}
 ${pkgs.lib.concatStringsSep "\n" excludedPackageNames}
 EOF
 
@@ -204,27 +283,36 @@ EOF
 
       hostPackageNamesFromDerivationArgs =
         args:
+        # Automatic wrapping is applied to every target dependency package.
+        # Tests and benchmarks are disabled for those packages, so do not force
+        # their dependency fields during Nix evaluation; some packages have
+        # broken test-only dependencies in nixpkgs.
         pkgs.lib.unique
           (builtins.filter
             (packageName:
               packageName != null
-              && packageName != "base"
-              && packageName != "template-haskell")
+              && !(builtins.elem packageName compilerBundledPackageNames))
             (map
               (dependency:
                 if dependency == null then
                   null
                 else
                   dependency.pname or null)
-              (componentHaskellDependsFromCabalDeps args)));
+              (componentHaskellDependsFromCabalDeps buildDependencyFields args)));
 
       mkDerivationWithWorkerConfig =
         hostPackageNames:
         validateCabalContext:
         args:
         let
+          buildArgs =
+            args
+            // pkgs.lib.optionalAttrs (!validateCabalContext) {
+              testHaskellDepends = [ ];
+              benchmarkHaskellDepends = [ ];
+            };
           externalHostPackageNames =
-            builtins.filter (packageName: packageName != args.pname) hostPackageNames;
+            builtins.filter (packageName: packageName != buildArgs.pname) hostPackageNames;
           workerHostPackageNames =
             builtins.filter
               (packageName: builtins.hasAttr packageName compiler.hostHaskellPkgs)
@@ -236,13 +324,13 @@ EOF
           workerContext = mkWorkerWithHostPackages compiler workerHostPackageNames;
         in
         rawCrossHaskellPkgs.mkDerivation
-          (args // {
+          (buildArgs // {
             doCheck = false;
             doHaddock = false;
             doHoogle = false;
             enableExternalInterpreter = false;
             enableLibraryProfiling = false;
-            preConfigure = (args.preConfigure or "") + ''
+            preConfigure = (buildArgs.preConfigure or "") + ''
 
               ${pluginLibraryMetadataScript {
                 inherit pluginLibDir nativeGhcPkg targetPluginGhcVersion;
@@ -265,13 +353,13 @@ EOF
               ${appendCrossPluginFlags}
             '';
             postConfigure =
-              (args.postConfigure or "")
+              (buildArgs.postConfigure or "")
               # Run the Cabal graph validation only for explicitly wrapped
               # final packages. Dependency packages still get the plugin hook,
               # but validating every transitive dependency would add overhead
               # without improving the final package's worker context.
               + pkgs.lib.optionalString validateCabalContext ''
-                ${cabalContextValidationScript compiler.nixTools externalHostPackageNames [ args.pname ]}
+                ${cabalContextValidationScript compiler.nixTools externalHostPackageNames [ buildArgs.pname ]}
               '';
           });
 
@@ -296,16 +384,20 @@ EOF
           });
 
       crossHaskellPkgs =
-        # Public target package set: every package built through this set uses
-        # the remote-TH plugin hook. This is what makes TH inside dependencies
-        # work; splices are intercepted when those dependencies compile.
+        # Public target package set. Packages that directly depend on
+        # `template-haskell` get the remote-TH plugin hook automatically; other
+        # transitive dependencies stay on the raw target builder to avoid
+        # changing large non-TH dependency graphs such as vector/tasty.
         rawCrossHaskellPkgs.override {
           overrides = _: _: {
             mkDerivation = args:
-              mkDerivationWithWorkerConfig
-                (hostPackageNamesFromDerivationArgs args)
-                false
-                args;
+              if hasBuildDependency "template-haskell" args then
+                mkDerivationWithWorkerConfig
+                  (hostPackageNamesFromDerivationArgs args)
+                  false
+                  args
+              else
+                rawCrossHaskellPkgs.mkDerivation args;
           };
         };
 

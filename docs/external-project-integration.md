@@ -211,6 +211,14 @@ in
 The dependency can contain its own TH splices. The final package only needs to
 depend on it normally in Cabal.
 
+Implementation notes:
+
+- Dependency packages are auto-wrapped only when they directly depend on
+  `template-haskell`; non-TH dependencies use the raw target builder.
+- GHC-bundled packages such as `bytestring` are ignored by host dependency
+  validation because they come from the compiler package DB, not from
+  `ghcWithPackages`.
+
 ## Troubleshooting
 
 Unsupported compiler version:
