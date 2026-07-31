@@ -291,6 +291,7 @@ They can be evaluated like external flakes without writing fixture lock files:
 
 ```bash
 nix build --no-write-lock-file ./examples/aeson
+nix build --no-write-lock-file ./examples/dependency-th
 nix build --no-write-lock-file ./examples/microlens
 nix build --no-write-lock-file ./examples/target-context
 nix build --no-write-lock-file ./examples/executable
@@ -300,6 +301,7 @@ To evaluate examples with another compiler profile:
 
 ```bash
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/aeson -L
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/dependency-th -L
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/microlens -L
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/target-context -L
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/executable -L
@@ -309,13 +311,14 @@ To validate the Android target profile, switch only `TH_CROSS_TARGET`:
 
 ```bash
 TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure --no-write-lock-file ./examples/aeson -L
+TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure --no-write-lock-file ./examples/dependency-th -L
 TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure --no-write-lock-file ./examples/microlens -L
 TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure --no-write-lock-file ./examples/target-context -L
 TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure --no-write-lock-file ./examples/executable -L
 ```
 
-The Android target validates with `aeson`, `microlens`, `target-context`, and
-`executable` examples on GHC 9.10.3. Build plans do not include `compiler-rt`,
+The Android target validates with `aeson`, `dependency-th`, `microlens`,
+`target-context`, and `executable` examples on GHC 9.10.3. Build plans do not include `compiler-rt`,
 `qemu-user`, `iserv-proxy`, or `iserv-wrapper`; they use the nixpkgs Android NDK
 toolchain wrapper instead. The Android target profile provides a target-specific
 Haskell package override that enables shared libraries so dependency packages
@@ -433,6 +436,7 @@ Build the current cross-compilation example packages:
 nix build --no-write-lock-file ./examples/target-context -L
 nix build --no-write-lock-file ./examples/microlens -L
 nix build --no-write-lock-file ./examples/aeson -L
+nix build --no-write-lock-file ./examples/dependency-th -L
 nix build --no-write-lock-file ./examples/executable -L
 ```
 
@@ -442,6 +446,7 @@ With an explicit GHC version:
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/target-context -L
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/microlens -L
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/aeson -L
+TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/dependency-th -L
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/executable -L
 ```
 

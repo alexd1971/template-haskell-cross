@@ -211,6 +211,9 @@ in
 The dependency can contain its own TH splices. The final package only needs to
 depend on it normally in Cabal.
 
+This path is validated by `examples/dependency-th` for `aarch64-linux` and for
+`aarch64-android` with GHC 9.10.3.
+
 Implementation notes:
 
 - Dependency packages are auto-wrapped only when they directly depend on
