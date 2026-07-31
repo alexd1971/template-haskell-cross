@@ -290,10 +290,10 @@ TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure -
 The Android target validates with `aeson`, `microlens`, `target-context`, and
 `executable` examples on GHC 9.10.3. Build plans do not include `compiler-rt`,
 `qemu-user`, `iserv-proxy`, or `iserv-wrapper`; they use the nixpkgs Android NDK
-toolchain wrapper instead. The target profile also forces
-`enableSharedLibraries = true` for the target Haskell package set so dependency
-packages provide dynamic interface files such as `*.dyn_hi`. Android shared
-libraries are cleaned before nixpkgs' `audit-tmpdir` hook so temporary build
+toolchain wrapper instead. The Android target profile provides a target-specific
+Haskell package override that enables shared libraries so dependency packages
+provide dynamic interface files such as `*.dyn_hi`. The same override cleans
+Android shared libraries before nixpkgs' `audit-tmpdir` hook so temporary build
 package-db entries do not remain in RPATH.
 
 ## Plugin Config

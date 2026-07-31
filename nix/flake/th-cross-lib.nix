@@ -58,60 +58,38 @@ let
     , targetProfile
     }:
     let
-      forcedEnableSharedLibraries =
-        targetProfile.enableSharedLibraries or null;
-      removeBuildRpath =
-        targetProfile.removeBuildRpath or false;
-    in
-    (crossPkgs.callPackage (pkgs.path + "/pkgs/development/haskell-modules") {
-      haskellLib = pkgs.haskell.lib.compose;
-      buildHaskellPackages = pkgs.haskell.packages.${profile.packageSetName};
-      ghc = crossGhc;
-      compilerConfig =
-        crossPkgs.callPackage
-          (pkgs.path + "/pkgs/development/haskell-modules/${profile.compilerConfigFile}")
-          {
-            haskellLib = pkgs.haskell.lib.compose;
-          };
-    }).override {
-      overrides = _: super: {
+      baseHaskellPkgs =
+        crossPkgs.callPackage (pkgs.path + "/pkgs/development/haskell-modules") {
+          haskellLib = pkgs.haskell.lib.compose;
+          buildHaskellPackages = pkgs.haskell.packages.${profile.packageSetName};
+          ghc = crossGhc;
+          compilerConfig =
+            crossPkgs.callPackage
+              (pkgs.path + "/pkgs/development/haskell-modules/${profile.compilerConfigFile}")
+              {
+                haskellLib = pkgs.haskell.lib.compose;
+              };
+        };
+
+      baseOverrides = _: super: {
         # TH execution is handled by th-host-worker, not by nixpkgs iserv-proxy.
         # Disable the default cross-package-set iserv path to avoid pulling
         # emulators such as qemu-user into target dependency builds.
         mkDerivation = args:
           super.mkDerivation
-            (args
-              // {
-                enableExternalInterpreter = false;
-              }
-              // pkgs.lib.optionalAttrs removeBuildRpath {
-                preFixup = (args.preFixup or "") + ''
-                  # Android shared Haskell libraries can inherit temporary
-                  # build-package-db paths in RPATH. Remove only TMPDIR RPATH
-                  # entries before nixpkgs' audit-tmpdir hook runs.
-                  while IFS= read -r -d "" elf; do
-                    old_rpath="$(patchelf --print-rpath "$elf" 2>/dev/null || true)"
-                    if [ -z "$old_rpath" ]; then
-                      continue
-                    fi
-
-                    new_rpath="$(printf '%s' "$old_rpath" | tr ':' '\n' | awk -v tmpdir="$TMPDIR/" 'index($0, tmpdir) != 1' | paste -sd: -)"
-                    if [ "$new_rpath" = "$old_rpath" ]; then
-                      continue
-                    fi
-
-                    if [ -z "$new_rpath" ]; then
-                      patchelf --remove-rpath "$elf"
-                    else
-                      patchelf --set-rpath "$new_rpath" "$elf"
-                    fi
-                  done < <(find "$out" -type f -print0)
-                '';
-              }
-              // pkgs.lib.optionalAttrs (forcedEnableSharedLibraries != null) {
-                enableSharedLibraries = forcedEnableSharedLibraries;
-              });
+            (args // {
+              enableExternalInterpreter = false;
+            });
       };
+
+      targetOverrides =
+        targetProfile.haskellPackageOverrides or (_: _: { });
+    in
+    baseHaskellPkgs.override {
+      overrides =
+        pkgs.lib.composeExtensions
+          baseOverrides
+          targetOverrides;
     };
 
   mkWorkerWithHostPackages =
@@ -328,8 +306,35 @@ EOF
       crossPkgs = pkgs.pkgsCross.aarch64-android-prebuilt;
       targetName = "aarch64-android";
       targetTriple = "aarch64-unknown-linux-android";
-      enableSharedLibraries = true;
-      removeBuildRpath = true;
+      haskellPackageOverrides = _: super: {
+        mkDerivation = args:
+          super.mkDerivation
+            (args // {
+              enableSharedLibraries = true;
+              preFixup = (args.preFixup or "") + ''
+                # Android shared Haskell libraries can inherit temporary
+                # build-package-db paths in RPATH. Remove only TMPDIR RPATH
+                # entries before nixpkgs' audit-tmpdir hook runs.
+                while IFS= read -r -d "" elf; do
+                  old_rpath="$(patchelf --print-rpath "$elf" 2>/dev/null || true)"
+                  if [ -z "$old_rpath" ]; then
+                    continue
+                  fi
+
+                  new_rpath="$(printf '%s' "$old_rpath" | tr ':' '\n' | awk -v tmpdir="$TMPDIR/" 'index($0, tmpdir) != 1' | paste -sd: -)"
+                  if [ "$new_rpath" = "$old_rpath" ]; then
+                    continue
+                  fi
+
+                  if [ -z "$new_rpath" ]; then
+                    patchelf --remove-rpath "$elf"
+                  else
+                    patchelf --set-rpath "$new_rpath" "$elf"
+                  fi
+                done < <(find "$out" -type f -print0)
+              '';
+            });
+      };
     };
   };
 
