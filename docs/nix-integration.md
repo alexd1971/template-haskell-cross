@@ -22,7 +22,7 @@ consumer plugin:
   th-cross-protocol dependency
 
 target package set:
-  patched aarch64-linux cross-GHC from the selected compiler profile
+  patched target cross-GHC from the selected compiler profile
   target dependencies and package DBs
 ```
 
@@ -30,6 +30,11 @@ The host worker and the cross compiler must use compatible
 `ghc`/`template-haskell` ABIs because the worker sends binary-encoded raw
 Template Haskell AST values. The old textual transport is legacy and is not used
 for package-level cross builds.
+
+The target Haskell package set disables nixpkgs' default cross
+`enableExternalInterpreter` path. TH execution is handled by `th-host-worker`,
+so target package builds should not pull `iserv-proxy`, `iserv-wrapper`, or
+emulators such as `qemu-user` just to support cross TH.
 
 The current flake exposes only `x86_64-linux` outputs. Adding `aarch64-linux` to
 the flake `systems` list would mean "evaluate this flake on an ARM Linux host";
@@ -71,12 +76,19 @@ package-level consumer builds. Its cross-specific patches are documented in
 `docs/ghc-cross-patches.md`.
 
 `lib.${system}.mkCrossFor` is the reusable API intended for external consumer
-flakes. `lib.${system}.mkAarch64LinuxForVersion` and
+flakes. It currently accepts these target names:
+
+- `aarch64-linux`: validated with all examples.
+- `aarch64-android`: backed by nixpkgs `aarch64-android-prebuilt`; target
+  profile validates with all examples for GHC 9.10.3 and enables shared
+  Haskell libraries.
+
+`lib.${system}.mkAarch64LinuxForVersion` and
 `lib.${system}.ghc9103Aarch64Linux` are compatibility aliases for the
 `aarch64-linux` target. The API exposes:
 
 - `crossHaskellPkgs`: target Haskell package set built around the patched
-  aarch64-linux GHC for the selected compiler profile.
+  target GHC for the selected compiler profile.
 - `buildPackage`: build a cabal2nix-generated package while injecting
   the TH cross plugin, worker, plugin config, package DB mapping, source dirs,
   CPP options, and context validation.
@@ -265,6 +277,24 @@ TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --n
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/target-context -L
 TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file ./examples/executable -L
 ```
+
+To validate the Android target profile, switch only `TH_CROSS_TARGET`:
+
+```bash
+TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure --no-write-lock-file ./examples/aeson -L
+TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure --no-write-lock-file ./examples/microlens -L
+TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure --no-write-lock-file ./examples/target-context -L
+TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=aarch64-android nix build --impure --no-write-lock-file ./examples/executable -L
+```
+
+The Android target validates with `aeson`, `microlens`, `target-context`, and
+`executable` examples on GHC 9.10.3. Build plans do not include `compiler-rt`,
+`qemu-user`, `iserv-proxy`, or `iserv-wrapper`; they use the nixpkgs Android NDK
+toolchain wrapper instead. The target profile also forces
+`enableSharedLibraries = true` for the target Haskell package set so dependency
+packages provide dynamic interface files such as `*.dyn_hi`. Android shared
+libraries are cleaned before nixpkgs' `audit-tmpdir` hook so temporary build
+package-db entries do not remain in RPATH.
 
 ## Plugin Config
 

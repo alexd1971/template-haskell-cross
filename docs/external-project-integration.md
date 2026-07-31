@@ -12,13 +12,29 @@ The integration model is intentionally Nix-side only:
 
 ## Supported Inputs
 
-The current public API supports an `x86_64-linux` host and the `aarch64-linux`
-target:
+The current public API supports an `x86_64-linux` host and these target names:
+
+- `aarch64-linux`: validated with all examples for GHC 9.8.4, 9.10.3, and
+  9.12.4.
+- `aarch64-android`: backed by nixpkgs `aarch64-android-prebuilt`; target
+  profile validates with all examples for GHC 9.10.3 and enables shared
+  Haskell libraries.
+
+Example:
 
 ```nix
 th-cross.lib.x86_64-linux.mkCrossFor {
   ghcVersion = "9.10.3";
   target = "aarch64-linux";
+}
+```
+
+For Android:
+
+```nix
+th-cross.lib.x86_64-linux.mkCrossFor {
+  ghcVersion = "9.10.3";
+  target = "aarch64-android";
 }
 ```
 
