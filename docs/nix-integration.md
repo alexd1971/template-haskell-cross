@@ -36,9 +36,10 @@ The target Haskell package set disables nixpkgs' default cross
 so target package builds should not pull `iserv-proxy`, `iserv-wrapper`, or
 emulators such as `qemu-user` just to support cross TH.
 
-The current flake exposes only `x86_64-linux` outputs. Adding `aarch64-linux` to
-the flake `systems` list would mean "evaluate this flake on an ARM Linux host";
-it would not create an Android or aarch64 target package set.
+The current flake exposes `x86_64-linux` and `aarch64-darwin` host outputs.
+Adding `aarch64-linux` to the flake `systems` list would mean "evaluate this
+flake on an ARM Linux host"; it would not create an Android or aarch64 target
+package set.
 
 ## Important Outputs
 
@@ -82,6 +83,11 @@ flakes. It currently accepts these target names:
 - `aarch64-android`: backed by nixpkgs `aarch64-android-prebuilt`; target
   profile validates with all examples for GHC 9.10.3 and enables shared
   Haskell libraries.
+- `iphone64`: experimental iOS device target backed by nixpkgs
+  `pkgsCross.iphone64`. It evaluates far enough to select the target package
+  set on Linux, but full derivation evaluation/building requires Apple Silicon
+  macOS plus a full `Xcode.app` in the Nix store. Command Line Tools are not
+  enough because nixpkgs' iOS SDK wrapper needs `iPhoneOS.platform`.
 
 `lib.${system}.mkAarch64LinuxForVersion` and
 `lib.${system}.ghc9103Aarch64Linux` are compatibility aliases for the
@@ -104,6 +110,16 @@ compatibility names for the lower-level implementation.
 
 Target profiles are defined in `nix/flake/target-profiles.nix`. Use that module
 to add new targets or target-specific Haskell package overrides.
+
+The `iphone64` profile applies a target package-set override for nixpkgs'
+`apple-sdk`: nixpkgs' iOS cross set currently has target `ncurses = null`, while
+the default SDK propagation phase tries to copy ncurses headers. The profile
+uses the SDK bootstrap mode to skip that propagation and preserves the
+`cups-headers` passthru required by Darwin stdenv.
+
+The current flake exposes `aarch64-darwin` outputs so iOS validation can run on
+Apple Silicon macOS. Intel macOS is not included because current nixpkgs dropped
+`x86_64-darwin` support.
 
 ## External Consumer Flake
 
@@ -246,8 +262,8 @@ Operational rules:
   a flake wrapper and generated expression rather than copying the scaffold.
 - Commit `flake.lock` for real external packages. The repository examples use
   `--no-write-lock-file` only to avoid fixture lock churn.
-- Current reusable API targets `x86_64-linux` hosts. Select the target and GHC
-  compiler profile with `mkCrossFor`.
+- Current reusable API exposes `x86_64-linux` and `aarch64-darwin` host
+  outputs. Select the target and GHC compiler profile with `mkCrossFor`.
 
 ## New Package Template
 
@@ -325,6 +341,20 @@ Haskell package override that enables shared libraries so dependency packages
 provide dynamic interface files such as `*.dyn_hi`. The same override cleans
 Android shared libraries before nixpkgs' `audit-tmpdir` hook so temporary build
 package-db entries do not remain in RPATH.
+
+The iOS device target profile is named `iphone64`. It is currently deferred:
+the pinned nixpkgs `pkgsCross.iphone64` profile needs Xcode 12.3 artifacts from
+a full `Xcode.app`. Command Line Tools do not contain
+`Contents/Developer/Platforms/iPhoneOS.platform`, so they cannot satisfy the
+SDK wrapper. Without access to the required Xcode download, iOS validation is
+blocked.
+
+Once `Xcode.app` is available in the Nix store, validate on Apple Silicon macOS:
+
+```bash
+NIXPKGS_ALLOW_UNFREE=1 TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=iphone64 nix build --impure --no-write-lock-file ./examples/target-context -L
+NIXPKGS_ALLOW_UNFREE=1 TH_CROSS_GHC_VERSION=9.10.3 TH_CROSS_TARGET=iphone64 nix build --impure --no-write-lock-file ./examples/dependency-th -L
+```
 
 ## Plugin Config
 

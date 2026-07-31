@@ -7,17 +7,33 @@
 
   outputs = { th-cross, ... }:
     let
-      system = "x86_64-linux";
+      systems = [
+        "x86_64-linux"
+        "aarch64-darwin"
+      ];
+      forAllSystems = f:
+        builtins.listToAttrs
+          (map
+            (system: {
+              name = system;
+              value = f system;
+            })
+            systems);
       ghcVersion =
         let value = builtins.getEnv "TH_CROSS_GHC_VERSION";
         in if value == "" then "9.10.3" else value;
       target =
         let value = builtins.getEnv "TH_CROSS_TARGET";
         in if value == "" then "aarch64-linux" else value;
-      thCross = th-cross.lib.${system}.mkCrossFor { inherit ghcVersion target; };
     in
     {
-      packages.${system}.default =
-        thCross.buildPackage ./nix/generated/th-target-context-consumer.nix;
+      packages = forAllSystems (system:
+        let
+          thCross = th-cross.lib.${system}.mkCrossFor { inherit ghcVersion target; };
+        in
+        {
+          default =
+            thCross.buildPackage ./nix/generated/th-target-context-consumer.nix;
+        });
     };
 }

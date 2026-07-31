@@ -12,13 +12,18 @@ The integration model is intentionally Nix-side only:
 
 ## Supported Inputs
 
-The current public API supports an `x86_64-linux` host and these target names:
+The current public API exposes `x86_64-linux` and `aarch64-darwin` host outputs
+and these target names:
 
 - `aarch64-linux`: validated with all examples for GHC 9.8.4, 9.10.3, and
   9.12.4.
 - `aarch64-android`: backed by nixpkgs `aarch64-android-prebuilt`; target
   profile validates with all examples for GHC 9.10.3 and enables shared
   Haskell libraries.
+- `iphone64`: experimental iOS device target backed by nixpkgs
+  `pkgsCross.iphone64`. It is not validated yet. It requires Apple Silicon
+  macOS plus a full `Xcode.app` in the Nix store; Command Line Tools are not
+  enough because nixpkgs' iOS SDK wrapper needs `iPhoneOS.platform`.
 
 Example:
 
@@ -35,6 +40,15 @@ For Android:
 th-cross.lib.x86_64-linux.mkCrossFor {
   ghcVersion = "9.10.3";
   target = "aarch64-android";
+}
+```
+
+For iOS device builds on Apple Silicon macOS:
+
+```nix
+th-cross.lib.aarch64-darwin.mkCrossFor {
+  ghcVersion = "9.10.3";
+  target = "iphone64";
 }
 ```
 

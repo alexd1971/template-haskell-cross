@@ -5,6 +5,7 @@ let
   # reusable helpers, experiments, apps, checks, and dev shells.
   systems = [
     "x86_64-linux"
+    "aarch64-darwin"
   ];
 
   forAllSystems = f:

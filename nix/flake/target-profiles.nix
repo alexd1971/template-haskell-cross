@@ -52,4 +52,28 @@
           });
     };
   };
+
+  "iphone64" = let
+    baseCrossPkgs = pkgs.pkgsCross.iphone64;
+    appleSdkCupsHeaders = baseCrossPkgs."apple-sdk".cups-headers;
+  in {
+    crossPkgs =
+      baseCrossPkgs.appendOverlays [
+        (_: previous: {
+          # nixpkgs' iOS cross package set has target `ncurses = null`, while
+          # apple-sdk's default propagation phase unconditionally tries to copy
+          # ncurses headers into the SDK. Use the existing bootstrap SDK mode to
+          # skip that propagation, but keep the `cups-headers` passthru expected
+          # by Darwin stdenv's allowed-requisites check.
+          "apple-sdk" =
+            (previous."apple-sdk".override { enableBootstrap = true; }).overrideAttrs (old: {
+              passthru = (old.passthru or { }) // {
+                cups-headers = appleSdkCupsHeaders;
+              };
+            });
+        })
+      ];
+    targetName = "arm64-apple-ios";
+    targetTriple = "arm64-apple-ios";
+  };
 }
