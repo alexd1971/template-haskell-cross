@@ -16,11 +16,13 @@ in
 {
   packages = forAllSystems (pkgs:
     let
-      # `hs` contains the host-side and target-side Haskell package sets.
-      hs = import ./haskell-pkgs.nix { inherit pkgs; };
+      # Project-local compiler registry: supported GHC profiles plus the
+      # derived patched/native/target package sets. This is not nixpkgs'
+      # generic `haskellPackages`.
+      compilerSets = import ./haskell-pkgs.nix { inherit pkgs; };
 
       crossGhc9103Aarch64 = import ./mk-cross-ghc.nix {
-        profile = hs.compilerProfiles.ghc9103;
+        profile = compilerSets.compilerProfiles.ghc9103;
         crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
         bootPkgs = pkgs.haskell.packages.ghc9103;
         targetName = "aarch64-linux";
@@ -28,15 +30,15 @@ in
       };
     in
     {
-      patched-ghc9103 = hs.patchedNativeGhc9103;
-      host-ghc9103-worker = hs.hostGhc9103HaskellPkgs.th-host-worker;
-      target-ghc9103-protocol = hs.targetGhc9103HaskellPkgs.th-cross-protocol;
-      target-ghc9103-plugin = hs.targetGhc9103HaskellPkgs.th-cross-plugin;
-      target-ghc9103-with-plugin = hs.targetGhc9103WithPlugin;
+      patched-ghc9103 = compilerSets.patchedNativeGhc9103;
+      host-ghc9103-worker = compilerSets.hostGhc9103HaskellPkgs.th-host-worker;
+      target-ghc9103-protocol = compilerSets.targetGhc9103HaskellPkgs.th-cross-protocol;
+      target-ghc9103-plugin = compilerSets.targetGhc9103HaskellPkgs.th-cross-plugin;
+      target-ghc9103-with-plugin = compilerSets.targetGhc9103WithPlugin;
       cross-ghc9103-aarch64-linux = crossGhc9103Aarch64;
-      target-ghc9103-target-context-package = hs.targetGhc9103HaskellPkgs.th-target-context-consumer;
-      th-cross-nix-tools = hs.nixTools;
-      default = hs.hostGhc9103HaskellPkgs.th-host-worker;
+      target-ghc9103-target-context-package = compilerSets.targetGhc9103HaskellPkgs.th-target-context-consumer;
+      th-cross-nix-tools = compilerSets.nixTools;
+      default = compilerSets.hostGhc9103HaskellPkgs.th-host-worker;
     });
 
   apps = forAllSystems (pkgs:
@@ -44,31 +46,32 @@ in
 
   checks = forAllSystems (pkgs:
     let
-      hs = import ./haskell-pkgs.nix { inherit pkgs; };
+      compilerSets = import ./haskell-pkgs.nix { inherit pkgs; };
       packages = self.packages.${pkgs.stdenv.hostPlatform.system};
     in
     import ./checks.nix {
-      inherit pkgs hs packages testFixturesDir;
+      inherit pkgs compilerSets packages testFixturesDir;
     });
 
   lib = forAllSystems (pkgs:
     let
-      hs = import ./haskell-pkgs.nix { inherit pkgs; };
+      compilerSets = import ./haskell-pkgs.nix { inherit pkgs; };
     in
     (import ./th-cross-lib.nix {
-      inherit pkgs;
-      compilerSets = hs;
+      inherit pkgs compilerSets;
     })
     // {
-      inherit (hs) compilerProfiles mkCompilerFromProfile mkCompilerForVersion compilers;
+      inherit (compilerSets) compilerProfiles mkCompilerFromProfile mkCompilerForVersion compilers;
     });
 
   devShells = forAllSystems (pkgs:
     let
-      hs = import ./haskell-pkgs.nix { inherit pkgs; };
+      compilerSets = import ./haskell-pkgs.nix { inherit pkgs; };
     in
     {
-      default = import ./dev-shell.nix { inherit pkgs hs; };
+      default = import ./dev-shell.nix {
+        inherit pkgs compilerSets;
+      };
     });
 
   templates = {

@@ -1,9 +1,9 @@
-{ pkgs, hs }:
+{ pkgs, compilerSets }:
 
 let
   mkGhcWrapperForVersion = version:
     let
-      compiler = hs.mkCompilerForVersion version;
+      compiler = compilerSets.mkCompilerForVersion version;
     in
     pkgs.writeShellScriptBin "ghc-${version}" ''
       exec ${compiler.targetGhcWithPlugin}/bin/ghc "$@"
@@ -11,13 +11,13 @@ let
 
   mkGhcPkgWrapperForVersion = version:
     let
-      compiler = hs.mkCompilerForVersion version;
+      compiler = compilerSets.mkCompilerForVersion version;
     in
     pkgs.writeShellScriptBin "ghc-${version}-pkg" ''
       exec ${compiler.targetGhcWithPlugin}/bin/ghc-pkg "$@"
     '';
 
-  ghcProfileVersions = map (profile: profile.version) (builtins.attrValues hs.compilerProfiles);
+  ghcProfileVersions = map (profile: profile.version) (builtins.attrValues compilerSets.compilerProfiles);
 
   thCrossBuild = pkgs.writeShellScriptBin "th-cross-build" ''
     set -euo pipefail

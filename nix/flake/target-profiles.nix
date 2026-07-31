@@ -1,5 +1,16 @@
 { pkgs }:
 
+# Target profiles describe only target-platform policy. Compiler-version policy
+# lives in `ghc-profiles.nix`.
+#
+# Required fields:
+# - `crossPkgs`: nixpkgs cross package set for the target.
+# - `targetName`: GHC target name used while building the cross compiler.
+# - `targetTriple`: executable prefix used by the installed cross GHC tools.
+#
+# Optional field:
+# - `haskellPackageOverrides`: target-specific overrides composed into the
+#   target Haskell package set before the TH plugin wrapper is applied.
 {
   "aarch64-linux" = {
     crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;

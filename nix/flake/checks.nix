@@ -1,4 +1,4 @@
-{ pkgs, hs, packages, testFixturesDir }:
+{ pkgs, compilerSets, packages, testFixturesDir }:
 
 # Fast flake checks that exercise the already-supported native/plugin-worker
 # combinations. Heavy cross-GHC builds are exposed as packages/experiments
@@ -11,7 +11,7 @@
       build_dir="$TMPDIR/example-build"
       mkdir -p "$build_dir"
 
-      ${hs.targetGhc9103WithPlugin}/bin/ghc \
+      ${compilerSets.targetGhc9103WithPlugin}/bin/ghc \
         -v0 \
         -fno-code \
         -fforce-recomp \
@@ -28,5 +28,5 @@
     '';
 
   target-ghc9103-target-context-package =
-    hs.targetGhc9103HaskellPkgs.th-target-context-consumer;
+    compilerSets.targetGhc9103HaskellPkgs.th-target-context-consumer;
 }

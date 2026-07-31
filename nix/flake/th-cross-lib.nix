@@ -1,6 +1,11 @@
 { pkgs, compilerSets }:
 
 let
+  # `compilerSets` is this project's compiler registry from
+  # `haskell-pkgs.nix`: supported GHC profiles plus patched worker GHC,
+  # host worker package sets, target plugin builds, and helper tools. It is
+  # intentionally distinct from nixpkgs' generic `haskellPackages`.
+
   # Read the native plugin package metadata in the same vocabulary GHC uses.
   # `-fplugin-library` still wants a concrete shared object path, so derive it
   # from `hs-libraries` plus the first `dynamic-library-dirs` entry.
@@ -187,6 +192,8 @@ EOF
     , targetProfile
     }:
     let
+      # Base target package set with target-profile policy only. Use this when
+      # constructing derivations that must not recursively inject the TH plugin.
       rawCrossHaskellPkgs =
         mkCrossHaskellPkgs {
           inherit crossPkgs crossGhc targetProfile;
@@ -222,6 +229,10 @@ EOF
             builtins.filter
               (packageName: builtins.hasAttr packageName compiler.hostHaskellPkgs)
               externalHostPackageNames;
+          # Local target-only packages may be present in the Cabal graph but
+          # absent from the host package set. They still participate in target
+          # compilation, but they cannot be added to `ghcWithPackages` by name.
+          # The worker package DB only gets packages resolvable on the host.
           workerContext = mkWorkerWithHostPackages compiler workerHostPackageNames;
         in
         rawCrossHaskellPkgs.mkDerivation
@@ -255,6 +266,10 @@ EOF
             '';
             postConfigure =
               (args.postConfigure or "")
+              # Run the Cabal graph validation only for explicitly wrapped
+              # final packages. Dependency packages still get the plugin hook,
+              # but validating every transitive dependency would add overhead
+              # without improving the final package's worker context.
               + pkgs.lib.optionalString validateCabalContext ''
                 ${cabalContextValidationScript compiler.nixTools externalHostPackageNames [ args.pname ]}
               '';
@@ -281,6 +296,9 @@ EOF
           });
 
       crossHaskellPkgs =
+        # Public target package set: every package built through this set uses
+        # the remote-TH plugin hook. This is what makes TH inside dependencies
+        # work; splices are intercepted when those dependencies compile.
         rawCrossHaskellPkgs.override {
           overrides = _: _: {
             mkDerivation = args:

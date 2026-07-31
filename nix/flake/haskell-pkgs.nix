@@ -1,6 +1,11 @@
 { pkgs }:
 
 let
+  # This module returns the project-local compiler registry consumed by
+  # `th-cross-lib.nix` as `compilerSets`. Each compiler entry bundles the
+  # patched native worker compiler, host worker package set, target plugin
+  # package set, and Nix helper tools for one supported GHC profile.
+  #
   # This file contains only Haskell package-set wiring. Each supported compiler
   # version is described by an explicit profile in `ghc-profiles.nix`.
   compilerProfiles = import ./ghc-profiles.nix;
