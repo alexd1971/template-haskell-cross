@@ -56,7 +56,8 @@ in
       hs = import ./haskell-pkgs.nix { inherit pkgs; };
     in
     (import ./th-cross-lib.nix {
-      inherit pkgs hs;
+      inherit pkgs;
+      compilerSets = hs;
     })
     // {
       inherit (hs) compilerProfiles mkCompilerFromProfile mkCompilerForVersion compilers;

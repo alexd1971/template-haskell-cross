@@ -178,6 +178,11 @@ Template Haskell generator dependencies should stay in normal Cabal
 `build-depends`. The Nix wrapper reads the generated package metadata and builds
 a matching host-side package environment for the worker.
 
+The TH cross plugin is installed into the target Haskell package set, not only
+into the final package derivation. This matters when a dependency package also
+contains TH splices: the dependency is compiled by the same target GHC with the
+same plugin hook, so its splices are evaluated through the host worker as well.
+
 Common rules:
 
 - Keep `template-haskell` in Cabal dependencies when the package imports TH.
@@ -186,6 +191,25 @@ Common rules:
 - Regenerate `nix/generated/my-package.nix` after dependency changes.
 - Do not manually pass worker package DBs unless `buildPackage` is not
   enough for a custom derivation.
+
+For local package dependencies, build the dependency through the same `thCross`
+package set and pass it to the consumer expression with `buildPackageWith`:
+
+```nix
+let
+  myDependency =
+    thCross.buildPackage ./dependency/nix/generated/my-dependency.nix;
+in
+{
+  packages.${system}.default =
+    thCross.buildPackageWith ./consumer/nix/generated/my-consumer.nix {
+      inherit myDependency;
+    };
+}
+```
+
+The dependency can contain its own TH splices. The final package only needs to
+depend on it normally in Cabal.
 
 ## Troubleshooting
 

@@ -1,4 +1,4 @@
-{ pkgs, hs }:
+{ pkgs, compilerSets }:
 
 let
   # Read the native plugin package metadata in the same vocabulary GHC uses.
@@ -187,23 +187,44 @@ EOF
     , targetProfile
     }:
     let
-      crossHaskellPkgs =
+      rawCrossHaskellPkgs =
         mkCrossHaskellPkgs {
           inherit crossPkgs crossGhc targetProfile;
-          profile = hs.compilerProfiles.${compiler.packageSetName};
+          profile = compilerSets.compilerProfiles.${compiler.packageSetName};
         };
 
       pluginLibDir = "${targetPlugin}/lib/ghc-${targetPluginGhcVersion}";
 
-      mkDerivationWithWorker =
+      hostPackageNamesFromDerivationArgs =
+        args:
+        pkgs.lib.unique
+          (builtins.filter
+            (packageName:
+              packageName != null
+              && packageName != "base"
+              && packageName != "template-haskell")
+            (map
+              (dependency:
+                if dependency == null then
+                  null
+                else
+                  dependency.pname or null)
+              (componentHaskellDependsFromCabalDeps args)));
+
+      mkDerivationWithWorkerConfig =
         hostPackageNames:
+        validateCabalContext:
         args:
         let
           externalHostPackageNames =
             builtins.filter (packageName: packageName != args.pname) hostPackageNames;
-          workerContext = mkWorkerWithHostPackages compiler externalHostPackageNames;
+          workerHostPackageNames =
+            builtins.filter
+              (packageName: builtins.hasAttr packageName compiler.hostHaskellPkgs)
+              externalHostPackageNames;
+          workerContext = mkWorkerWithHostPackages compiler workerHostPackageNames;
         in
-        crossHaskellPkgs.mkDerivation
+        rawCrossHaskellPkgs.mkDerivation
           (args // {
             doCheck = false;
             doHaddock = false;
@@ -227,22 +248,26 @@ EOF
               ${generatePluginConfig {
                 inherit targetGhcPkg;
                 nixTools = compiler.nixTools;
-                hostPackageNames = externalHostPackageNames;
+                hostPackageNames = workerHostPackageNames;
                 inherit (workerContext) worker hostGhcPkg;
               }}
               ${appendCrossPluginFlags}
             '';
             postConfigure =
-              pkgs.lib.concatStringsSep "\n" [
-                (args.postConfigure or "")
-                (cabalContextValidationScript compiler.nixTools externalHostPackageNames [ args.pname ])
-              ];
+              (args.postConfigure or "")
+              + pkgs.lib.optionalString validateCabalContext ''
+                ${cabalContextValidationScript compiler.nixTools externalHostPackageNames [ args.pname ]}
+              '';
           });
+
+      mkDerivationWithWorker =
+        hostPackageNames:
+        mkDerivationWithWorkerConfig hostPackageNames true;
 
       mkCabalContextProbe =
         expectedHostPackageNames:
         args:
-        crossHaskellPkgs.mkDerivation
+        rawCrossHaskellPkgs.mkDerivation
           (args // {
             doCheck = false;
             doHaddock = false;
@@ -255,15 +280,32 @@ EOF
               ];
           });
 
-      callPackageWithWorker =
+      crossHaskellPkgs =
+        rawCrossHaskellPkgs.override {
+          overrides = _: _: {
+            mkDerivation = args:
+              mkDerivationWithWorkerConfig
+                (hostPackageNamesFromDerivationArgs args)
+                false
+                args;
+          };
+        };
+
+      callPackageWithWorkerArgs =
         packageFile:
+        packageArgs:
         let
-          basePackage = crossHaskellPkgs.callPackage packageFile { };
+          basePackage = crossHaskellPkgs.callPackage packageFile packageArgs;
           hostPackageNames = hostPackageNamesFromCabalDeps basePackage.getCabalDeps;
         in
-        crossHaskellPkgs.callPackage packageFile {
-          mkDerivation = mkDerivationWithWorker hostPackageNames;
-        };
+        crossHaskellPkgs.callPackage packageFile
+          (packageArgs // {
+            mkDerivation = mkDerivationWithWorker hostPackageNames;
+          });
+
+      callPackageWithWorker =
+        packageFile:
+        callPackageWithWorkerArgs packageFile { };
 
       callPackageCabalContextProbe =
         packageFile:
@@ -278,18 +320,24 @@ EOF
           mkDerivation = mkCabalContextProbe expectedHostPackageNames;
         };
 
-      buildPackage = callPackageWithWorker;
+      buildPackageWith = callPackageWithWorkerArgs;
+
+      buildPackage = packageFile: buildPackageWith packageFile { };
 
       checkCabalContext = callPackageCabalContextProbe;
     in
     {
       inherit
         crossHaskellPkgs
+        rawCrossHaskellPkgs
         hostPackageNamesFromCabalDeps
+        hostPackageNamesFromDerivationArgs
         mkDerivationWithWorker
         mkCabalContextProbe
+        buildPackageWith
         buildPackage
         checkCabalContext
+        callPackageWithWorkerArgs
         callPackageWithWorker
         callPackageCabalContextProbe
         ;
@@ -302,8 +350,8 @@ EOF
     , target ? "aarch64-linux"
     }:
     let
-      compiler = hs.mkCompilerForVersion ghcVersion;
-      compilerProfile = hs.compilerProfiles.${compiler.packageSetName};
+      compiler = compilerSets.mkCompilerForVersion ghcVersion;
+      compilerProfile = compilerSets.compilerProfiles.${compiler.packageSetName};
       targetProfile = targetProfiles.${target}
         or (throw "Unsupported TH cross target ${target}; add it to targetProfiles in nix/flake/th-cross-lib.nix");
       inherit (targetProfile) crossPkgs targetName targetTriple;

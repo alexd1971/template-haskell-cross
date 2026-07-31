@@ -1,0 +1,6 @@
+cradle:
+  cabal:
+    - path: "./dependency/src"
+      component: "lib:th-splice-dependency"
+    - path: "./consumer/src"
+      component: "lib:th-dependency-consumer"

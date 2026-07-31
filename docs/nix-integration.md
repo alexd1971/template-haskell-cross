@@ -92,6 +92,8 @@ flakes. It currently accepts these target names:
 - `buildPackage`: build a cabal2nix-generated package while injecting
   the TH cross plugin, worker, plugin config, package DB mapping, source dirs,
   CPP options, and context validation.
+- `buildPackageWith`: like `buildPackage`, but also accepts an attrset of
+  extra package arguments for generated expressions with local dependencies.
 - `checkCabalContext`: build only the Cabal context validation probe for a
   package.
 - `mkDerivationWithWorker`: lower-level `mkDerivation` override for package
@@ -137,6 +139,11 @@ The package file should be a normal cabal2nix-generated expression. The helper
 reuses its `getCabalDeps` metadata to derive the host-side worker package set.
 At configure time it validates that this evaluation-time dependency set matches
 Cabal's configured component graph.
+
+The plugin-enabled `mkDerivation` is installed into the target package set
+itself. As a result, target dependencies that contain TH splices are compiled
+through the same remote TH path. Final-package validation is still performed
+only by `buildPackage`/`buildPackageWith`, not for every transitive dependency.
 
 ## Existing Package Migration
 
