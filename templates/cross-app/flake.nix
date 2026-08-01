@@ -19,12 +19,8 @@
               value = f system;
             })
             systems);
-      ghcVersion =
-        let value = builtins.getEnv "TH_CROSS_GHC_VERSION";
-        in if value == "" then "9.10.3" else value;
-      target =
-        let value = builtins.getEnv "TH_CROSS_TARGET";
-        in if value == "" then "aarch64-linux" else value;
+      ghcVersion = "9.10.3";
+      target = "aarch64-linux";
     in
     {
       packages = forAllSystems (system:

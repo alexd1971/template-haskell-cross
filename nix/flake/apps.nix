@@ -44,6 +44,18 @@
             > th-executable-consumer.nix
         )
 
+        (
+          cd ../../examples/dependency-th/dependency/nix/generated
+          ${pkgs.cabal2nix}/bin/cabal2nix ../.. \
+            > th-splice-dependency.nix
+        )
+
+        (
+          cd ../../examples/dependency-th/consumer/nix/generated
+          ${pkgs.cabal2nix}/bin/cabal2nix ../.. \
+            > th-dependency-consumer.nix
+        )
+
         ${pkgs.cabal2nix}/bin/cabal2nix ../../nix/tools \
           > th-cross-nix-tools.nix
       '';

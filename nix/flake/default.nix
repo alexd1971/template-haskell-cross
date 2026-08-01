@@ -1,86 +1,70 @@
 { self, nixpkgs }:
 
 let
-  # Keep the top-level flake small: this module wires together package sets,
-  # reusable helpers, experiments, apps, checks, and dev shells.
-  systems = [
+  nixpkgsLib = nixpkgs.lib;
+
+  # Keep the top-level flake small: this module only wires reusable package
+  # sets, public helpers, maintenance apps, checks, dev shells, and templates.
+  buildSystems = [
     "x86_64-linux"
     "aarch64-darwin"
   ];
 
-  forAllSystems = f:
-    nixpkgs.lib.genAttrs systems (system:
-      f (import nixpkgs { inherit system; }));
+  # Local equivalent of flake-utils' `eachSystem`.
+  #
+  # `mkOutputs` receives a nixpkgs package set for one build system and returns
+  # normal flake sections, for example:
+  #
+  #   { packages = ...; checks = ...; lib = ...; }
+  #
+  # The flake schema wants those sections grouped the other way around:
+  #
+  #   { packages.x86_64-linux = ...; checks.x86_64-linux = ...; }
+  #
+  # So this helper evaluates `mkOutputs` once per build system and transposes
+  # the result into the schema shape expected by Nix.
+  forEachBuildSystem = mkOutputs:
+    nixpkgsLib.foldl' nixpkgsLib.recursiveUpdate { }
+      (map
+        (buildSystem:
+          nixpkgsLib.mapAttrs
+            (_: sectionOutputs: { ${buildSystem} = sectionOutputs; })
+            (mkOutputs (import nixpkgs { system = buildSystem; })))
+        buildSystems);
 
-  testFixturesDir = ../../plugin/test/fixtures;
 in
-{
-  packages = forAllSystems (pkgs:
+  forEachBuildSystem (pkgs:
     let
-      # Project-local compiler registry: supported GHC profiles plus the
-      # derived patched/native/target package sets. This is not nixpkgs'
-      # generic `haskellPackages`.
+      # Project-local compiler registry. This is not nixpkgs' generic
+      # `haskellPackages`; it bundles supported GHC profiles, patched worker
+      # compilers, target plugin packages, and Nix helper tools.
       compilerSets = import ./haskell-pkgs.nix { inherit pkgs; };
-
-      crossGhc9103Aarch64 = import ./mk-cross-ghc.nix {
-        profile = compilerSets.compilerProfiles.ghc9103;
-        crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
-        bootPkgs = pkgs.haskell.packages.ghc9103;
-        targetName = "aarch64-linux";
-        targetTriple = "aarch64-unknown-linux-gnu";
-      };
-    in
-    {
-      patched-ghc9103 = compilerSets.patchedNativeGhc9103;
-      host-ghc9103-worker = compilerSets.hostGhc9103HaskellPkgs.th-host-worker;
-      target-ghc9103-protocol = compilerSets.targetGhc9103HaskellPkgs.th-cross-protocol;
-      target-ghc9103-plugin = compilerSets.targetGhc9103HaskellPkgs.th-cross-plugin;
-      target-ghc9103-with-plugin = compilerSets.targetGhc9103WithPlugin;
-      cross-ghc9103-aarch64-linux = crossGhc9103Aarch64;
-      target-ghc9103-target-context-package = compilerSets.targetGhc9103HaskellPkgs.th-target-context-consumer;
-      th-cross-nix-tools = compilerSets.nixTools;
-      default = compilerSets.hostGhc9103HaskellPkgs.th-host-worker;
-    });
-
-  apps = forAllSystems (pkgs:
-    import ./apps.nix { inherit pkgs; });
-
-  checks = forAllSystems (pkgs:
-    let
-      compilerSets = import ./haskell-pkgs.nix { inherit pkgs; };
-      packages = self.packages.${pkgs.stdenv.hostPlatform.system};
-    in
-    import ./checks.nix {
-      inherit pkgs compilerSets packages testFixturesDir;
-    });
-
-  lib = forAllSystems (pkgs:
-    let
-      compilerSets = import ./haskell-pkgs.nix { inherit pkgs; };
-    in
-    (import ./th-cross-lib.nix {
-      inherit pkgs compilerSets;
-    })
-    // {
-      inherit (compilerSets) compilerProfiles mkCompilerFromProfile mkCompilerForVersion compilers;
-    });
-
-  devShells = forAllSystems (pkgs:
-    let
-      compilerSets = import ./haskell-pkgs.nix { inherit pkgs; };
-    in
-    {
-      default = import ./dev-shell.nix {
+      thCrossLib = import ./th-cross-lib.nix {
         inherit pkgs compilerSets;
       };
-    });
+    in
+    {
+      apps = import ./apps.nix { inherit pkgs; };
 
-  templates = {
-    cross-app = {
-      path = ../../templates/cross-app;
-      description = "Template Haskell cross-compilation app scaffold";
+      checks = import ./checks.nix {
+        inherit thCrossLib;
+      };
+
+      lib = thCrossLib;
+
+      devShells = {
+        default = import ./dev-shell.nix {
+          inherit pkgs compilerSets;
+        };
+      };
+    })
+  // {
+    templates = {
+      cross-app = {
+        path = ../../templates/cross-app;
+        description = "Template Haskell cross-compilation app scaffold";
+      };
+
+      default = self.templates.cross-app;
     };
-
-    default = self.templates.cross-app;
-  };
-}
+  }

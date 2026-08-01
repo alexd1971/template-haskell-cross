@@ -12,7 +12,6 @@ let
     , workerPatchNames
     , crossPatchNames ? []
     , jailbreak ? false
-    , includeTargetContextConsumer ? false
     }:
     {
       inherit
@@ -20,7 +19,6 @@ let
         packageSetName
         compilerConfigFile
         jailbreak
-        includeTargetContextConsumer
         ;
 
       workerPatches = map (name: patches.${name}) workerPatchNames;
@@ -48,7 +46,6 @@ in
       "forceCompilerInternalInterpreter"
       "ignoreEmptyTHFinalizers"
     ];
-    includeTargetContextConsumer = true;
   };
 
   ghc9124 = mkGhcProfile {

@@ -36,45 +36,25 @@ The target Haskell package set disables nixpkgs' default cross
 so target package builds should not pull `iserv-proxy`, `iserv-wrapper`, or
 emulators such as `qemu-user` just to support cross TH.
 
-The current flake exposes `x86_64-linux` and `aarch64-darwin` host outputs.
+The current flake exposes `x86_64-linux` and `aarch64-darwin` build-system outputs.
 Adding `aarch64-linux` to the flake `systems` list would mean "evaluate this
-flake on an ARM Linux host"; it would not create an Android or aarch64 target
+flake on an ARM Linux build system"; it would not create an Android or aarch64 target
 package set.
 
 ## Important Outputs
 
 ```text
-packages.${system}.patched-ghc9103
-packages.${system}.host-ghc9103-worker
-packages.${system}.target-ghc9103-protocol
-packages.${system}.target-ghc9103-plugin
-packages.${system}.target-ghc9103-with-plugin
-packages.${system}.target-ghc9103-target-context-package
-packages.${system}.cross-ghc9103-aarch64-linux
-packages.${system}.th-cross-nix-tools
-checks.${system}.target-ghc9103-worker-smoke
-checks.${system}.target-ghc9103-target-context-package
+checks.${system}.ghc9103-aarch64-linux-target-context
 apps.${system}.regen-cabal-nix
 devShells.${system}.default
-lib.${system}.ghc9103Aarch64Linux
 lib.${system}.mkCrossFor
-lib.${system}.mkAarch64LinuxForVersion
+lib.${system}.supportedGhcVersions
+lib.${system}.supportedTargets
 ```
 
-`target-ghc9103-protocol` contains the shared binary protocol and splice-key
-types used by both the plugin and the worker.
-
-`patched-ghc9103` is the native worker compiler. It applies
-`export-runth.patch`, which exports raw TH runner functions and
-captures raw `addTopDecls` payloads.
-
-The compatibility outputs above point at the GHC 9.10.3 profile. New consumer
-flakes should prefer `lib.${system}.mkCrossFor`, which accepts `ghcVersion` and
-`target`.
-
-`cross-ghc9103-aarch64-linux` is the patched aarch64 cross compiler used by the
-package-level consumer builds. Its cross-specific patches are documented in
-`docs/ghc-cross-patches.md`.
+Consumer flakes should use `lib.${system}.mkCrossFor`, which accepts
+`ghcVersion` and `target`. Root `packages` are intentionally not part of the
+public API; repository maintenance commands are exposed as flake `apps`.
 
 `lib.${system}.mkCrossFor` is the reusable API intended for external consumer
 flakes. It currently accepts these target names:
@@ -89,12 +69,8 @@ flakes. It currently accepts these target names:
   macOS plus a full `Xcode.app` in the Nix store. Command Line Tools are not
   enough because nixpkgs' iOS SDK wrapper needs `iPhoneOS.platform`.
 
-`lib.${system}.mkAarch64LinuxForVersion` and
-`lib.${system}.ghc9103Aarch64Linux` are compatibility aliases for the
-`aarch64-linux` target. The API exposes:
+The value returned by `mkCrossFor` exposes:
 
-- `crossHaskellPkgs`: target Haskell package set built around the patched
-  target GHC for the selected compiler profile.
 - `buildPackage`: build a cabal2nix-generated package while injecting
   the TH cross plugin, worker, plugin config, package DB mapping, source dirs,
   CPP options, and context validation.
@@ -102,11 +78,9 @@ flakes. It currently accepts these target names:
   extra package arguments for generated expressions with local dependencies.
 - `checkCabalContext`: build only the Cabal context validation probe for a
   package.
-- `mkDerivationWithWorker`: lower-level `mkDerivation` override for package
-  definitions that are not loaded from a cabal2nix file.
 
-`callPackageWithWorker` and `callPackageCabalContextProbe` remain available as
-compatibility names for the lower-level implementation.
+Lower-level helpers are kept under `lib.${system}.internal` for repository
+maintenance and diagnostics. They are not the external integration API.
 
 Target profiles are defined in `nix/flake/target-profiles.nix`. Use that module
 to add new targets or target-specific Haskell package overrides.
@@ -212,12 +186,8 @@ Add a flake that delegates the package derivation to `th-cross`:
   outputs = { th-cross, ... }:
     let
       system = "x86_64-linux";
-      ghcVersion =
-        let value = builtins.getEnv "TH_CROSS_GHC_VERSION";
-        in if value == "" then "9.10.3" else value;
-      target =
-        let value = builtins.getEnv "TH_CROSS_TARGET";
-        in if value == "" then "aarch64-linux" else value;
+      ghcVersion = "9.10.3";
+      target = "aarch64-linux";
       thCross = th-cross.lib.${system}.mkCrossFor { inherit ghcVersion target; };
     in
     {
@@ -231,8 +201,11 @@ Build:
 
 ```bash
 nix build --no-write-lock-file . -L
-TH_CROSS_GHC_VERSION=9.12.4 TH_CROSS_TARGET=aarch64-linux nix build --impure --no-write-lock-file . -L
 ```
+
+To change compiler or target in an external project, edit `ghcVersion` or
+`target` in `flake.nix`. The environment-variable pattern is reserved for this
+repository's example matrix builds.
 
 If dependency resolution looks wrong, first inspect the Cabal context that the
 integration sees:
@@ -493,12 +466,11 @@ Coverage:
 - `th-executable-consumer` checks executable components and same-package source
   module visibility.
 
-Build the lower-level compiler/plugin pieces:
+Build the lower-level compiler/plugin pieces when debugging the project itself:
 
 ```bash
-nix build .#host-ghc9103-worker
-nix build .#target-ghc9103-plugin
-nix build .#cross-ghc9103-aarch64-linux
+nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; in f.lib.x86_64-linux.internal.compilers.ghc9103.hostWorker'
+nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; in f.lib.x86_64-linux.internal.compilers.ghc9103.targetPlugin'
 ```
 
 Run the fast flake checks:
@@ -518,37 +490,45 @@ nix develop
 The shell provides:
 
 ```text
-ghc-9.10.3
-ghc-9.10.3-pkg
+ghc-<version>
+ghc-<version>-pkg
 th-cross-build
 th-cross-test
 ```
 
-The wrappers use separate Cabal state:
+`th-cross-build` and `th-cross-test` require an explicit compiler profile:
 
-```text
-.cabal-store-nix
-dist-newstyle-nix
+```bash
+TH_CROSS_GHC_VERSION=9.10.3 th-cross-build
+TH_CROSS_GHC_VERSION=9.10.3 th-cross-test
 ```
 
-This avoids mixing Nix GHC package ids with packages built by ghcup GHCs.
+The wrappers use compiler-specific Cabal state:
+
+```text
+.cabal-store-nix-ghc-<version>
+dist-newstyle-nix-ghc-<version>
+```
+
+This avoids mixing package ids across different GHC profiles or with packages
+built by ghcup GHCs.
 
 Build the core Cabal workspace:
 
 ```bash
-th-cross-build
+TH_CROSS_GHC_VERSION=9.10.3 th-cross-build
 ```
 
 Run integration tests:
 
 ```bash
-th-cross-test
+TH_CROSS_GHC_VERSION=9.10.3 th-cross-test
 ```
 
 By default this runs:
 
 ```bash
-th-cross-test th-cross-plugin:integration --test-show-details=direct
+TH_CROSS_GHC_VERSION=9.10.3 th-cross-test th-cross-plugin:integration --test-show-details=direct
 ```
 
 The helper builds the patched worker through Nix before invoking `cabal test`
@@ -568,7 +548,7 @@ normal flake evaluation.
 
 ## Cross-GHC Without Interpreter Baggage
 
-The current `cross-ghc9103-aarch64-linux` derivation starts from
+The current aarch64-linux cross-GHC derivation starts from
 `pkgs.pkgsCross.aarch64-multiplatform.buildPackages.haskell.compiler.ghc9103`.
 That path is designed for the standard cross-TH story where GHC may use a
 target `iserv`. TH cross-compilation support does not use target iserv: splice
@@ -600,8 +580,7 @@ cross GHC still loads THCross.Plugin through -fplugin-library
 cross GHC does not need a target interpreter for TH splice execution
 ```
 
-The probe should not replace `cross-ghc9103-aarch64-linux` until it passes the
-consumer package builds. A safe first step is a
-`cross-ghc9103-aarch64-linux-lean-probe` that reports closure/package-db
-contents and then tries the smallest source or Hadrian patch needed to remove
-unused interpreter pieces.
+The probe should not replace the `mkCrossFor { target = "aarch64-linux"; }`
+cross-GHC until it passes the consumer package builds. A safe first step is a
+separate lean probe that reports closure/package-db contents and then tries the
+smallest source or Hadrian patch needed to remove unused interpreter pieces.

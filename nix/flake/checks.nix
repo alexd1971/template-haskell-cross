@@ -1,32 +1,15 @@
-{ pkgs, compilerSets, packages, testFixturesDir }:
+{ thCrossLib }:
 
-# Fast flake checks that exercise the already-supported native/plugin-worker
-# combinations. Heavy cross-GHC builds are exposed as packages/experiments
-# instead of mandatory checks.
+# Keep flake checks on the same production path external consumers use:
+# `mkCrossFor` plus `buildPackage`. Broader version/target/example matrices are
+# run manually because cold cross-GHC builds can take hours.
+let
+  defaultCross = thCrossLib.mkCrossFor {
+    ghcVersion = "9.10.3";
+    target = "aarch64-linux";
+  };
+in
 {
-  target-ghc9103-worker-smoke = pkgs.runCommand
-    "th-cross-target-ghc9103-worker-smoke"
-    { }
-    ''
-      build_dir="$TMPDIR/example-build"
-      mkdir -p "$build_dir"
-
-      ${compilerSets.targetGhc9103WithPlugin}/bin/ghc \
-        -v0 \
-        -fno-code \
-        -fforce-recomp \
-        -i${testFixturesDir} \
-        -outputdir "$build_dir" \
-        -hidir "$build_dir" \
-        -odir "$build_dir" \
-        -stubdir "$build_dir" \
-        -fplugin=THCross.Plugin \
-        -fplugin-opt=THCross.Plugin:worker=${packages.host-ghc9103-worker}/bin/th-host-worker \
-        ${testFixturesDir + "/Example.hs"}
-
-      touch "$out"
-    '';
-
-  target-ghc9103-target-context-package =
-    compilerSets.targetGhc9103HaskellPkgs.th-target-context-consumer;
+  ghc9103-aarch64-linux-target-context =
+    defaultCross.buildPackage ../../examples/target-context/nix/generated/th-target-context-consumer.nix;
 }

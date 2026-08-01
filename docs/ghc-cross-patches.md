@@ -136,8 +136,9 @@ submitted independently of the TH cross work.
 
 **File**: `nix/patches/export-runth.patch`
 
-**Applies to**: native patched worker GHC (`packages.*.patched-ghc9103`), not
-the aarch64 cross-GHC derivation.
+**Applies to**: native patched worker GHC
+(`lib.*.internal.compilers.<profile>.patchedGhc`), not the aarch64 cross-GHC
+derivation.
 
 **What**:
 
@@ -187,20 +188,16 @@ Haskell.
 
 ## Usage
 
-The patched native worker GHC is exposed as:
+The patched worker is available through the internal compiler profile registry:
 
 ```bash
-nix build .#patched-ghc9103
+nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; in f.lib.x86_64-linux.internal.compilers.ghc9103.hostWorker'
 ```
 
-The patched cross-GHC is exposed as:
-
-```bash
-nix build .#cross-ghc9103-aarch64-linux
-```
-
-The derivation's `passthru.crossPatchNotes` contains structured metadata about
-the cross-GHC patches P1-P3.
+The patched cross-GHC is an implementation detail of `mkCrossFor`; build an
+example package through `buildPackage` to exercise it. The cross-GHC
+derivation's `passthru.crossPatchNotes` contains structured metadata about the
+cross-GHC patches P1-P3.
 
 Cross-compilation of packages using this GHC is demonstrated by the standalone
 example flakes:

@@ -116,23 +116,26 @@ Current remaining work:
 
 ## Compiler Profiles
 
-The flake exposes explicit compiler profiles instead of creating a new top-level
-package output for each GHC version:
+The public flake API exposes supported GHC versions through `mkCrossFor` rather
+than creating a new top-level package output for each compiler. Compiler-profile
+internals remain available under `lib.${system}.internal` for repository
+maintenance and diagnostics:
 
 ```text
-lib.${system}.compilerProfiles
-lib.${system}.mkCompilerForVersion
-lib.${system}.mkCompilerFromProfile
-lib.${system}.compilers.ghc9124
+lib.${system}.supportedGhcVersions
+lib.${system}.mkCrossFor
+lib.${system}.internal.compilerProfiles
+lib.${system}.internal.mkCompilerForVersion
+lib.${system}.internal.compilers.ghc9124
 ```
 
 Each profile records the GHC version, nixpkgs package-set name, compiler
 configuration file, and the worker/cross patch file lists to apply from
-`nix/patches`. `mkCompilerForVersion` selects one of those profiles by version.
-The result contains the patched worker GHC, host and target package sets, the
-worker executable, the target plugin, and a target `ghcWithPackages` containing
-the plugin. The worker libdir version is derived from the selected GHC
-derivation, not passed as a separate string.
+`nix/patches`. The internal `mkCompilerForVersion` selects one of those profiles
+by version. The result contains the patched worker GHC, host and target package
+sets, the worker executable, the target plugin, and a target `ghcWithPackages`
+containing the plugin. The worker libdir version is derived from the selected
+GHC derivation, not passed as a separate string.
 
 The cross-GHC `--export-dynamic` change is a Hadrian flag rather than a patch
 file, so it remains in the cross-GHC derivation next to the target-specific
@@ -154,23 +157,22 @@ internal Cabal format and must be read by a compatible Cabal library version.
 The following eval checks pass:
 
 ```bash
-nix eval .#lib.x86_64-linux.compilers.ghc9124.targetProtocol.drvPath
-nix eval .#lib.x86_64-linux.compilers.ghc9124.targetPlugin.drvPath
-nix eval .#lib.x86_64-linux.compilers.ghc9124.hostWorker.drvPath
-nix eval .#lib.x86_64-linux.compilers.ghc9124.patchedGhc.drvPath
+nix eval .#lib.x86_64-linux.internal.compilers.ghc9124.targetPlugin.drvPath
+nix eval .#lib.x86_64-linux.internal.compilers.ghc9124.hostWorker.drvPath
+nix eval .#lib.x86_64-linux.internal.compilers.ghc9124.patchedGhc.drvPath
 ```
+
+The matching protocol package is covered as a dependency of both worker and
+plugin builds.
 
 The following build checks pass for 9.8.4, 9.10.3, and 9.12.4:
 
 ```bash
 version=9.12.4
-nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.mkCompilerForVersion "'"$version"'"; in p.hostWorker' -L
-nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.mkCompilerForVersion "'"$version"'"; in p.targetPlugin' -L
-nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.mkCompilerForVersion "'"$version"'"; in p.targetGhcWithPlugin' -L
+nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.internal.mkCompilerForVersion "'"$version"'"; in p.hostWorker' -L
+nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.internal.mkCompilerForVersion "'"$version"'"; in p.targetPlugin' -L
+nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.internal.mkCompilerForVersion "'"$version"'"; in p.targetGhcWithPlugin' -L
 ```
-
-The matching protocol package is covered as a dependency of both worker and
-plugin builds.
 
 The full integration test suite passes with the 9.8.4, 9.10.3, and 9.12.4
 compiler profiles from `nix develop`:
@@ -212,9 +214,9 @@ For each candidate version:
 
 ```bash
 version=9.12.4
-nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.mkCompilerForVersion "'"$version"'"; in p.hostWorker' -L
-nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.mkCompilerForVersion "'"$version"'"; in p.targetPlugin' -L
-nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.mkCompilerForVersion "'"$version"'"; in p.targetGhcWithPlugin' -L
+nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.internal.mkCompilerForVersion "'"$version"'"; in p.hostWorker' -L
+nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.internal.mkCompilerForVersion "'"$version"'"; in p.targetPlugin' -L
+nix build --impure --expr 'let f = builtins.getFlake "path:'"$PWD"'"; p = f.lib.x86_64-linux.internal.mkCompilerForVersion "'"$version"'"; in p.targetGhcWithPlugin' -L
 ```
 
 3. Run plugin integration tests with the matching worker:

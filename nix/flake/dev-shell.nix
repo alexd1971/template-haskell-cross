@@ -17,25 +17,39 @@ let
       exec ${compiler.targetGhcWithPlugin}/bin/ghc-pkg "$@"
     '';
 
-  ghcProfileVersions = map (profile: profile.version) (builtins.attrValues compilerSets.compilerProfiles);
+  ghcProfileVersions =
+    pkgs.lib.sort pkgs.lib.versionOlder
+      (map (profile: profile.version) (builtins.attrValues compilerSets.compilerProfiles));
+  ghcProfileList = pkgs.lib.concatStringsSep ", " ghcProfileVersions;
+  requireGhcVersion = ''
+    cross_ghc_version="''${TH_CROSS_GHC_VERSION:-}"
+    if [ -z "$cross_ghc_version" ]; then
+      echo "TH_CROSS_GHC_VERSION is required; supported versions: ${ghcProfileList}" >&2
+      exit 2
+    fi
+  '';
 
   thCrossBuild = pkgs.writeShellScriptBin "th-cross-build" ''
     set -euo pipefail
 
+    ${requireGhcVersion}
+
     if [ "$#" -eq 0 ]; then
       set -- th-cross-plugin
     elif [ "$1" = "all" ] || [ "$1" = "th-host-worker" ]; then
-      echo "th-host-worker requires patched GHC; use: nix build .#host-ghc9103-worker" >&2
+      echo "th-host-worker requires patched GHC; use: nix build --impure --expr 'let f = builtins.getFlake \"path:$PWD\"; c = f.lib.${pkgs.stdenv.hostPlatform.system}.internal.mkCompilerForVersion \"$TH_CROSS_GHC_VERSION\"; in c.hostWorker'" >&2
       exit 2
     fi
 
+    store_suffix="ghc-$cross_ghc_version"
+
     exec cabal \
-      --store-dir "$PWD/.cabal-store-nix" \
+      --store-dir "$PWD/.cabal-store-nix-$store_suffix" \
       build \
       --project-dir . \
-      --builddir dist-newstyle-nix \
-      --with-compiler ghc-9.10.3 \
-      --with-hc-pkg ghc-9.10.3-pkg \
+      --builddir "dist-newstyle-nix-$store_suffix" \
+      --with-compiler "ghc-$cross_ghc_version" \
+      --with-hc-pkg "ghc-$cross_ghc_version-pkg" \
       "$@"
   '';
 
@@ -55,31 +69,16 @@ let
       set -- th-cross-plugin:integration --test-show-details=direct "$@"
     fi
 
-    cross_ghc_version="''${TH_CROSS_GHC_VERSION:-}"
-    worker_package="''${TH_CROSS_TEST_WORKER_PACKAGE:-host-ghc9103-worker}"
-    worker_profile="''${TH_CROSS_TEST_WORKER_PROFILE:-}"
+    ${requireGhcVersion}
 
-    if [ -n "$cross_ghc_version" ]; then
-      compiler_expr="(builtins.getFlake \"path:$PWD\").lib.${pkgs.stdenv.hostPlatform.system}.mkCompilerForVersion \"$cross_ghc_version\""
-      worker_expr="($compiler_expr).hostWorker"
-      target_ghc_expr="($compiler_expr).targetGhcWithPlugin"
-      worker="$(nix build --no-link --print-out-paths --impure --expr "$worker_expr")"
-      target_ghc="$(nix build --no-link --print-out-paths --impure --expr "$target_ghc_expr")"
-      test_ghc="$target_ghc/bin/ghc"
-      test_ghc_pkg="$target_ghc/bin/ghc-pkg"
-      store_suffix="ghc-$cross_ghc_version"
-    elif [ -n "$worker_profile" ]; then
-      worker_expr="(builtins.getFlake \"path:$PWD\").lib.${pkgs.stdenv.hostPlatform.system}.compilers.$worker_profile.hostWorker"
-      worker="$(nix build --no-link --print-out-paths --impure --expr "$worker_expr")"
-      test_ghc="''${TH_CROSS_TEST_GHC:-ghc-9.10.3}"
-      test_ghc_pkg="''${TH_CROSS_TEST_GHC_PKG:-''${test_ghc}-pkg}"
-      store_suffix="$(printf '%s' "$test_ghc" | tr -c 'A-Za-z0-9_.-' '_')"
-    else
-      worker="$(nix build --no-link --print-out-paths ".#$worker_package")"
-      test_ghc="''${TH_CROSS_TEST_GHC:-ghc-9.10.3}"
-      test_ghc_pkg="''${TH_CROSS_TEST_GHC_PKG:-''${test_ghc}-pkg}"
-      store_suffix="$(printf '%s' "$test_ghc" | tr -c 'A-Za-z0-9_.-' '_')"
-    fi
+    compiler_expr="(builtins.getFlake \"path:$PWD\").lib.${pkgs.stdenv.hostPlatform.system}.internal.mkCompilerForVersion \"$cross_ghc_version\""
+    worker_expr="($compiler_expr).hostWorker"
+    target_ghc_expr="($compiler_expr).targetGhcWithPlugin"
+    worker="$(nix build --no-link --print-out-paths --impure --expr "$worker_expr")"
+    target_ghc="$(nix build --no-link --print-out-paths --impure --expr "$target_ghc_expr")"
+    test_ghc="$target_ghc/bin/ghc"
+    test_ghc_pkg="$target_ghc/bin/ghc-pkg"
+    store_suffix="ghc-$cross_ghc_version"
 
     store_dir="''${TH_CROSS_TEST_STORE_DIR:-$PWD/.cabal-store-nix-$store_suffix}"
     build_dir="''${TH_CROSS_TEST_BUILDDIR:-dist-newstyle-nix-$store_suffix}"
@@ -120,8 +119,8 @@ pkgs.mkShell {
 TH cross dev shell
 
 Compilers:
-  ghc-9.10.3      raw TH plugin/test compiler
-  ghc-9.12.4      GHC 9.12.4 compiler profile
+  supported profiles: ${ghcProfileList}
+  ghc-<version> and ghc-<version>-pkg wrappers are available for each profile
 
 Helpers:
   th-cross-build     cabal build th-cross-plugin and dependencies with isolated Nix Cabal store
@@ -129,8 +128,7 @@ Helpers:
   th-cross-test -p   run matching integration tests
 
 Environment:
-  raw TH tests use the wrapped patched GHC 9.10 worker
-  set TH_CROSS_GHC_VERSION=9.12.4 to switch compiler profile
+  set TH_CROSS_GHC_VERSION=<version> before th-cross-build/th-cross-test
   set TH_CROSS_TEST_STORE_DIR or TH_CROSS_TEST_BUILDDIR to override compiler-specific Cabal paths
 
 Nix checks:

@@ -401,7 +401,7 @@ EOF
           };
         };
 
-      callPackageWithWorkerArgs =
+      buildPackageWith =
         packageFile:
         packageArgs:
         let
@@ -413,11 +413,9 @@ EOF
             mkDerivation = mkDerivationWithWorker hostPackageNames;
           });
 
-      callPackageWithWorker =
-        packageFile:
-        callPackageWithWorkerArgs packageFile { };
+      buildPackage = packageFile: buildPackageWith packageFile { };
 
-      callPackageCabalContextProbe =
+      checkCabalContext =
         packageFile:
         let
           basePackage = crossHaskellPkgs.callPackage packageFile { };
@@ -429,31 +427,20 @@ EOF
         crossHaskellPkgs.callPackage packageFile {
           mkDerivation = mkCabalContextProbe expectedHostPackageNames;
         };
-
-      buildPackageWith = callPackageWithWorkerArgs;
-
-      buildPackage = packageFile: buildPackageWith packageFile { };
-
-      checkCabalContext = callPackageCabalContextProbe;
     in
     {
       inherit
-        crossHaskellPkgs
-        rawCrossHaskellPkgs
-        hostPackageNamesFromCabalDeps
-        hostPackageNamesFromDerivationArgs
-        mkDerivationWithWorker
-        mkCabalContextProbe
         buildPackageWith
         buildPackage
         checkCabalContext
-        callPackageWithWorkerArgs
-        callPackageWithWorker
-        callPackageCabalContextProbe
         ;
     };
 
   targetProfiles = import ./target-profiles.nix { inherit pkgs; };
+  supportedGhcVersions =
+    pkgs.lib.sort pkgs.lib.versionOlder
+      (map (profile: profile.version) (builtins.attrValues compilerSets.compilerProfiles));
+  supportedTargets = builtins.attrNames targetProfiles;
 
   mkCrossFor =
     { ghcVersion
@@ -463,7 +450,7 @@ EOF
       compiler = compilerSets.mkCompilerForVersion ghcVersion;
       compilerProfile = compilerSets.compilerProfiles.${compiler.packageSetName};
       targetProfile = targetProfiles.${target}
-        or (throw "Unsupported TH cross target ${target}; add it to targetProfiles in nix/flake/th-cross-lib.nix");
+        or (throw "Unsupported TH cross target ${target}; add it to nix/flake/target-profiles.nix");
       inherit (targetProfile) crossPkgs targetName targetTriple;
       crossGhc = import ./mk-cross-ghc.nix {
         profile = compilerProfile;
@@ -478,24 +465,21 @@ EOF
       nativeGhcPkg = "${pkgs.haskell.compiler.${compiler.packageSetName}}/bin/ghc-pkg";
       targetPluginGhcVersion = compiler.version;
     };
-
-  mkAarch64LinuxForVersion = version:
-    mkCrossFor {
-      ghcVersion = version;
-      target = "aarch64-linux";
-    };
-
-  ghc9103Aarch64Linux =
-    mkAarch64LinuxForVersion "9.10.3";
 in
 {
   inherit
-    ghc9103Aarch64Linux
-    targetProfiles
     mkCrossFor
-    mkAarch64LinuxForVersion
-    hostPackageNamesFromCabalDeps
-    mkWorkerWithHostPackages
-    mkWorkerEnabledPackageSet
+    supportedGhcVersions
+    supportedTargets
     ;
+
+  # Non-API escape hatch for repository maintenance and diagnostics. External
+  # consumers should use `mkCrossFor` plus the returned `buildPackage` helpers.
+  internal = {
+    inherit (compilerSets)
+      compilerProfiles
+      mkCompilerForVersion
+      compilers
+      ;
+  };
 }

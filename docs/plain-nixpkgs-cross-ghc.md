@@ -3,6 +3,12 @@
 This document records the first investigation of using plain nixpkgs as the
 cross-GHC provider for the TH cross prototype.
 
+This is historical design/debugging material, not the current integration guide.
+The current public API is `lib.${system}.mkCrossFor { ghcVersion = ...; target = ...; }`
+plus the returned `buildPackage` helpers. Old `Example.hs` smoke commands and
+probe package names below are preserved to explain how the cross-GHC approach
+was validated.
+
 ## Scope
 
 The target checked here is:

@@ -12,8 +12,8 @@ The integration model is intentionally Nix-side only:
 
 ## Supported Inputs
 
-The current public API exposes `x86_64-linux` and `aarch64-darwin` host outputs
-and these target names:
+The current public API exposes `x86_64-linux` and `aarch64-darwin` build-system
+outputs and these target names:
 
 - `aarch64-linux`: validated with all examples for GHC 9.8.4, 9.10.3, and
   9.12.4.
@@ -121,7 +121,7 @@ repository often use `--no-write-lock-file` only to avoid fixture lock churn.
 
 ## Build Commands
 
-Default build, using GHC 9.10.3 and `aarch64-linux`:
+Build with the explicit `ghcVersion` and `target` from `flake.nix`:
 
 ```bash
 nix build . -L
