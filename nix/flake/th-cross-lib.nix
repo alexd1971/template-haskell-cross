@@ -401,9 +401,10 @@ EOF
           };
         };
 
-      buildPackageWith =
-        packageFile:
-        packageArgs:
+      buildPackage =
+        { packageFile
+        , packageArgs ? { }
+        }:
         let
           basePackage = crossHaskellPkgs.callPackage packageFile packageArgs;
           hostPackageNames = hostPackageNamesFromCabalDeps basePackage.getCabalDeps;
@@ -412,8 +413,6 @@ EOF
           (packageArgs // {
             mkDerivation = mkDerivationWithWorker hostPackageNames;
           });
-
-      buildPackage = packageFile: buildPackageWith packageFile { };
 
       checkCabalContext =
         packageFile:
@@ -430,7 +429,6 @@ EOF
     in
     {
       inherit
-        buildPackageWith
         buildPackage
         checkCabalContext
         ;

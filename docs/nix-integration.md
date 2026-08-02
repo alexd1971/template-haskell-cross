@@ -73,9 +73,8 @@ The value returned by `mkCrossFor` exposes:
 
 - `buildPackage`: build a cabal2nix-generated package while injecting
   the TH cross plugin, worker, plugin config, package DB mapping, source dirs,
-  CPP options, and context validation.
-- `buildPackageWith`: like `buildPackage`, but also accepts an attrset of
-  extra package arguments for generated expressions with local dependencies.
+  CPP options, and context validation. Accepts optional `packageArgs` for
+  generated expressions with local dependencies.
 - `checkCabalContext`: build only the Cabal context validation probe for a
   package.
 
@@ -120,7 +119,9 @@ package through the exported API:
     in
     {
       packages.${system}.default =
-        thCross.buildPackage ./generated/my-package.nix;
+        thCross.buildPackage {
+          packageFile = ./generated/my-package.nix;
+        };
     };
 }
 ```
@@ -133,7 +134,7 @@ Cabal's configured component graph.
 The plugin-enabled `mkDerivation` is installed into the target package set
 itself. As a result, target dependencies that contain TH splices are compiled
 through the same remote TH path. Final-package validation is still performed
-only by `buildPackage`/`buildPackageWith`, not for every transitive dependency.
+only by `buildPackage`, not for every transitive dependency.
 
 There are several important constraints in that implementation:
 
@@ -192,7 +193,9 @@ Add a flake that delegates the package derivation to `th-cross`:
     in
     {
       packages.${system}.default =
-        thCross.buildPackage ./nix/generated/my-package.nix;
+        thCross.buildPackage {
+          packageFile = ./nix/generated/my-package.nix;
+        };
     };
 }
 ```

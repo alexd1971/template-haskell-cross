@@ -108,7 +108,9 @@ Use this shape for the package flake:
     in
     {
       packages.${system}.default =
-        thCross.buildPackage ./nix/generated/my-package.nix;
+        thCross.buildPackage {
+          packageFile = ./nix/generated/my-package.nix;
+        };
 
       packages.${system}.cabal-context-probe =
         thCross.checkCabalContext ./nix/generated/my-package.nix;
@@ -207,17 +209,22 @@ Common rules:
   enough for a custom derivation.
 
 For local package dependencies, build the dependency through the same `thCross`
-package set and pass it to the consumer expression with `buildPackageWith`:
+package set and pass it to the consumer expression with `packageArgs`:
 
 ```nix
 let
   myDependency =
-    thCross.buildPackage ./dependency/nix/generated/my-dependency.nix;
+    thCross.buildPackage {
+      packageFile = ./dependency/nix/generated/my-dependency.nix;
+    };
 in
 {
   packages.${system}.default =
-    thCross.buildPackageWith ./consumer/nix/generated/my-consumer.nix {
-      inherit myDependency;
+    thCross.buildPackage {
+      packageFile = ./consumer/nix/generated/my-consumer.nix;
+      packageArgs = {
+        inherit myDependency;
+      };
     };
 }
 ```

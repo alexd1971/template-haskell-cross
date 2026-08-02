@@ -33,7 +33,9 @@
         in
         {
           default =
-            thCross.buildPackage ./nix/generated/th-aeson-consumer.nix;
+            thCross.buildPackage {
+              packageFile = ./nix/generated/th-aeson-consumer.nix;
+            };
         });
     };
 }

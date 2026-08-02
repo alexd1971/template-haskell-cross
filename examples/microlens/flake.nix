@@ -33,7 +33,9 @@
         in
         {
           default =
-            thCross.buildPackage ./nix/generated/th-microlens-consumer.nix;
+            thCross.buildPackage {
+              packageFile = ./nix/generated/th-microlens-consumer.nix;
+            };
 
           cabal-context-probe =
             thCross.checkCabalContext ./nix/generated/th-microlens-consumer.nix;

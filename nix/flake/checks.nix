@@ -11,5 +11,7 @@ let
 in
 {
   ghc9103-aarch64-linux-target-context =
-    defaultCross.buildPackage ../../examples/target-context/nix/generated/th-target-context-consumer.nix;
+    defaultCross.buildPackage {
+      packageFile = ../../examples/target-context/nix/generated/th-target-context-consumer.nix;
+    };
 }

@@ -31,13 +31,18 @@
         let
           thCross = th-cross.lib.${system}.mkCrossFor { inherit ghcVersion target; };
           dependencyPackage =
-            thCross.buildPackage ./dependency/nix/generated/th-splice-dependency.nix;
+            thCross.buildPackage {
+              packageFile = ./dependency/nix/generated/th-splice-dependency.nix;
+            };
         in
         {
           "th-splice-dependency" = dependencyPackage;
           default =
-            thCross.buildPackageWith ./consumer/nix/generated/th-dependency-consumer.nix {
-              "th-splice-dependency" = dependencyPackage;
+            thCross.buildPackage {
+              packageFile = ./consumer/nix/generated/th-dependency-consumer.nix;
+              packageArgs = {
+                "th-splice-dependency" = dependencyPackage;
+              };
             };
         });
     };

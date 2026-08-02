@@ -29,7 +29,9 @@
         in
         {
           default =
-            thCross.buildPackage ./nix/generated/cross-app.nix;
+            thCross.buildPackage {
+              packageFile = ./nix/generated/cross-app.nix;
+            };
         });
     };
 }

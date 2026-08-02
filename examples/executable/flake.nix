@@ -33,7 +33,9 @@
         in
         {
           default =
-            thCross.buildPackage ./nix/generated/th-executable-consumer.nix;
+            thCross.buildPackage {
+              packageFile = ./nix/generated/th-executable-consumer.nix;
+            };
         });
     };
 }
