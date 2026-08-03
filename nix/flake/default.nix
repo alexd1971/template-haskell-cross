@@ -9,6 +9,14 @@ let
     "x86_64-linux"
     "aarch64-darwin"
   ];
+  importNixpkgs = buildSystem:
+    import nixpkgs {
+      system = buildSystem;
+      # Android cross toolchains in nixpkgs depend on SDK/NDK artifacts whose
+      # source archives are marked unfree. Consumers cannot override this from
+      # outside because target profiles are built from this package set.
+      config.allowUnfree = true;
+    };
 
   # Local equivalent of flake-utils' `eachSystem`.
   #
@@ -29,7 +37,7 @@ let
         (buildSystem:
           nixpkgsLib.mapAttrs
             (_: sectionOutputs: { ${buildSystem} = sectionOutputs; })
-            (mkOutputs (import nixpkgs { system = buildSystem; })))
+            (mkOutputs (importNixpkgs buildSystem)))
         buildSystems);
 
 in

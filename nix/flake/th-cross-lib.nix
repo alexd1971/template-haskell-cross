@@ -456,12 +456,17 @@ EOF
         bootPkgs = pkgs.haskell.packages.${compiler.packageSetName};
       };
     in
-    mkWorkerEnabledPackageSet {
+    (mkWorkerEnabledPackageSet {
       inherit crossPkgs crossGhc compiler targetProfile;
       targetGhcPkg = "${crossGhc}/bin/${targetTriple}-ghc-pkg";
       targetPlugin = compiler.targetPlugin;
       nativeGhcPkg = "${pkgs.haskell.compiler.${compiler.packageSetName}}/bin/ghc-pkg";
       targetPluginGhcVersion = compiler.version;
+    })
+    // {
+      # Embedding integrations may need target compiler runtime artifacts.
+      # Selecting and packaging them is integration policy, not th-cross.
+      targetGhc = crossGhc;
     };
 in
 {
