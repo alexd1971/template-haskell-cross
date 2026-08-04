@@ -179,8 +179,8 @@ let
 
   mkWorkerWithHostPackages =
     compiler:
-    hostPackageNames:
-    if hostPackageNames == [ ] then
+    hostPackages:
+    if hostPackages == [ ] then
       {
         worker = "${compiler.hostWorker}/bin/th-host-worker";
         hostGhcPkg = "${compiler.patchedGhc}/bin/ghc-pkg";
@@ -189,7 +189,7 @@ let
       let
         hostGhcWithPackages =
           compiler.hostHaskellPkgs.ghcWithPackages
-            (hpkgs: map (packageName: hpkgs.${packageName}) hostPackageNames);
+            (_: hostPackages);
       in
       {
         worker = "${pkgs.runCommand
@@ -301,6 +301,7 @@ EOF
               (componentHaskellDependsFromCabalDeps buildDependencyFields args)));
 
       mkDerivationWithWorkerConfig =
+        localHostPackages:
         hostPackageNames:
         validateCabalContext:
         args:
@@ -313,15 +314,19 @@ EOF
             };
           externalHostPackageNames =
             builtins.filter (packageName: packageName != buildArgs.pname) hostPackageNames;
-          workerHostPackageNames =
+          workerHostPackages =
             builtins.filter
-              (packageName: builtins.hasAttr packageName compiler.hostHaskellPkgs)
-              externalHostPackageNames;
-          # Local target-only packages may be present in the Cabal graph but
-          # absent from the host package set. They still participate in target
-          # compilation, but they cannot be added to `ghcWithPackages` by name.
-          # The worker package DB only gets packages resolvable on the host.
-          workerContext = mkWorkerWithHostPackages compiler workerHostPackageNames;
+              (package: package != null)
+              (map
+                (packageName:
+                  if builtins.hasAttr packageName localHostPackages then
+                    localHostPackages.${packageName}
+                  else if builtins.hasAttr packageName compiler.hostHaskellPkgs then
+                    compiler.hostHaskellPkgs.${packageName}
+                  else
+                    null)
+                externalHostPackageNames);
+          workerContext = mkWorkerWithHostPackages compiler workerHostPackages;
         in
         rawCrossHaskellPkgs.mkDerivation
           (buildArgs // {
@@ -347,7 +352,7 @@ EOF
               ${generatePluginConfig {
                 inherit targetGhcPkg;
                 nixTools = compiler.nixTools;
-                hostPackageNames = workerHostPackageNames;
+                hostPackageNames = map (package: package.pname) workerHostPackages;
                 inherit (workerContext) worker hostGhcPkg;
               }}
               ${appendCrossPluginFlags}
@@ -364,8 +369,9 @@ EOF
           });
 
       mkDerivationWithWorker =
+        localHostPackages:
         hostPackageNames:
-        mkDerivationWithWorkerConfig hostPackageNames true;
+        mkDerivationWithWorkerConfig localHostPackages hostPackageNames true;
 
       mkCabalContextProbe =
         expectedHostPackageNames:
@@ -393,6 +399,7 @@ EOF
             mkDerivation = args:
               if hasBuildDependency "template-haskell" args then
                 mkDerivationWithWorkerConfig
+                  { }
                   (hostPackageNamesFromDerivationArgs args)
                   false
                   args
@@ -404,14 +411,43 @@ EOF
       buildPackage =
         { packageFile
         , packageArgs ? { }
+        , localPackages ? { }
+        , derivationArgs ? { }
         }:
         let
-          basePackage = crossHaskellPkgs.callPackage packageFile packageArgs;
+          mkLocalPackages = packageSet:
+            let
+              localPackageOutputs =
+                pkgs.lib.mapAttrs
+                  (_: localPackage:
+                    let
+                      packageArguments = builtins.functionArgs (import localPackage.packageFile);
+                      localDependencyArguments =
+                        pkgs.lib.filterAttrs
+                          (packageName: _: builtins.hasAttr packageName packageArguments)
+                          localPackageOutputs;
+                    in
+                    packageSet.callPackage
+                      localPackage.packageFile
+                      ((localPackage.packageArgs or { }) // localDependencyArguments))
+                  localPackages;
+            in
+            localPackageOutputs;
+
+          targetLocalPackages = mkLocalPackages crossHaskellPkgs;
+          hostLocalPackages = mkLocalPackages compiler.hostHaskellPkgs;
+          targetPackageArgs = packageArgs // targetLocalPackages;
+          basePackage = crossHaskellPkgs.callPackage packageFile targetPackageArgs;
           hostPackageNames = hostPackageNamesFromCabalDeps basePackage.getCabalDeps;
         in
         crossHaskellPkgs.callPackage packageFile
-          (packageArgs // {
-            mkDerivation = mkDerivationWithWorker hostPackageNames;
+          (targetPackageArgs // {
+            # Consumers may need a build-time environment variable or hook for
+            # their final derivation. Merge it here so it also reaches the
+            # worker-enabled builder rather than bypassing the TH plugin.
+            mkDerivation = args:
+              mkDerivationWithWorker hostLocalPackages hostPackageNames
+                (args // derivationArgs);
           });
 
       checkCabalContext =
