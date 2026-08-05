@@ -8,6 +8,8 @@ build-type: Simple
 common warnings
   ghc-options:
       -Wall
+  default-extensions:
+      LambdaCase
 
 library th-cross-nix-tools-lib
   import: warnings
@@ -22,6 +24,7 @@ library th-cross-nix-tools-lib
       base,
       bytestring,
       Cabal,
+      Cabal-syntax,
       directory,
       filepath,
       process
@@ -37,6 +40,7 @@ executable th-cross-nix-tool
       base,
       bytestring,
       Cabal,
+      Cabal-syntax,
       directory,
       filepath,
       th-cross-nix-tools-lib

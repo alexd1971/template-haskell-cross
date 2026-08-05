@@ -7,11 +7,13 @@ import Control.Monad (forM)
 import qualified Data.ByteString as ByteString
 import qualified Data.List as List
 import Distribution.PackageDescription
-  ( BuildInfo (cppOptions, hsSourceDirs)
+  ( BuildInfo (cppOptions, defaultExtensions, defaultLanguage, hsSourceDirs, oldExtensions, otherExtensions)
   , GenericPackageDescription
   )
 import Distribution.PackageDescription.Parsec (parseGenericPackageDescriptionMaybe)
+import Distribution.Pretty (prettyShow)
 import Distribution.Utils.Path (getSymbolicPath)
+import Language.Haskell.Extension (Extension (..), KnownExtension, Language)
 import System.Directory (getCurrentDirectory, listDirectory)
 import System.Exit (ExitCode (..), die)
 import System.FilePath ((</>), takeExtension)
@@ -34,16 +36,47 @@ writePluginConfig outputFile worker hostGhcPkg targetGhcPkg targetPackageDb host
       cppOptions' =
         map ("host-ghc-option=" <>) $
           List.nub (extractFromAllComponents cppOptions gpd)
+      languageOptions =
+        map ("host-ghc-option=" <>) $
+          List.nub (extractFromAllComponents languageFields gpd)
       configLines =
         ["worker=" <> worker]
           <> map ("host-package-id=" <>) hostPackageIds
           <> unitIdMapOptions
           <> sourceDirOptions
           <> cppOptions'
+          <> languageOptions
   writeFile outputFile (unlines configLines)
   where
     resolveHostPackageIds packageName =
       words <$> ghcPkg hostGhcPkg ["field", packageName, "id", "--simple-output"]
+
+    -- | Collect the @default-language@, @default-extensions@,
+    -- @other-extensions@, and legacy @extensions@ fields from every
+    -- component's 'BuildInfo'.
+    --
+    -- The worker runs an independent native GHC session and does not read the
+    -- Cabal component configuration, so without these options it would fall
+    -- back to its default language and extension set. That breaks modules that
+    -- rely on extensions enabled in the .cabal file instead of per-module
+    -- LANGUAGE pragmas, for example @TemplateHaskell@ under @GHC2021@.
+    languageFields bi =
+      maybe [] languageFlag (defaultLanguage bi)
+        <> map extensionFlag (defaultExtensions bi)
+        <> map extensionFlag (otherExtensions bi)
+        <> map extensionFlag (oldExtensions bi)
+
+    languageFlag :: Language -> [String]
+    languageFlag language = ["-X" <> prettyShow language]
+
+    extensionFlag :: Extension -> String
+    extensionFlag extension = "-X" <> renderExtension extension
+
+    renderExtension :: Extension -> String
+    renderExtension = \case
+      EnableExtension known -> prettyShow known
+      DisableExtension known -> "No" <> prettyShow known
+      UnknownExtension name -> name
 
 readPackageDescription :: IO GenericPackageDescription
 readPackageDescription = do

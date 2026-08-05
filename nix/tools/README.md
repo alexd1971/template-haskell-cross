@@ -34,12 +34,20 @@ host-package-id=microlens-0.4.14.0-...
 unit-id-map=microlens-0.4.14.0=microlens-0.4.14.0-...
 host-source-dir=src
 host-ghc-option=-DTH_CONSUMER_TARGET_CONTEXT
+host-ghc-option=-XTemplateHaskell
+host-ghc-option=-XGHC2021
 ```
 
 It combines the responsibilities that used to be separate dump tools:
 
 - Cabal `hs-source-dirs` become `host-source-dir=...`.
 - Cabal `cpp-options` become `host-ghc-option=...`.
+- Cabal `default-language`, `default-extensions`, `other-extensions`, and the
+  legacy `extensions` fields become `host-ghc-option=-X...`. The worker runs an
+  independent native GHC session that does not read the Cabal component
+  configuration, so without these options it would fall back to its default
+  language and extension set and fail on modules that rely on extensions
+  declared in the .cabal file instead of per-module LANGUAGE pragmas.
 - host package names are resolved with `HOST_GHC_PKG` into exact
   `host-package-id=...` entries.
 - raw TH exact-name package ids are mapped to target unit ids via
