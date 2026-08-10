@@ -454,10 +454,16 @@ EOF
                         pkgs.lib.filterAttrs
                           (packageName: _: builtins.hasAttr packageName packageArguments)
                           localPackageOutputs;
+                      basePackage =
+                        packageSet.callPackage
+                          localPackage.packageFile
+                          ((localPackage.packageArgs or { }) // localDependencyArguments);
                     in
-                    packageSet.callPackage
-                      localPackage.packageFile
-                      ((localPackage.packageArgs or { }) // localDependencyArguments))
+                    if builtins.hasAttr "derivationArgs" localPackage then
+                      pkgs.haskell.lib.overrideCabal basePackage
+                        (old: (localPackage.derivationArgs old))
+                    else
+                      basePackage)
                   localPackages;
             in
             localPackageOutputs;
