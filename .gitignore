@@ -5,6 +5,7 @@ dist-newstyle-nix-*/
 .cabal-store-nix-*/
 .agents/
 .codex/
+__pycache__/
 *.hi
 *.o
 *.dyn_hi

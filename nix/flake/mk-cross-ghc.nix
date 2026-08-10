@@ -18,6 +18,8 @@ let
   bootstrapped =
     compiler.override {
       inherit bootPkgs;
+      enableDwarf = false;
+      enableNuma = false;
     };
 in
 bootstrapped.overrideAttrs (old:
@@ -31,6 +33,19 @@ bootstrapped.overrideAttrs (old:
   {
     hadrianFlags = old.hadrianFlags ++ [ exportDynamicFlag ];
     patches = (old.patches or []) ++ profile.crossPatches;
+    postInstall = (old.postInstall or "") + ''
+      dynObjectRoot="$out/lib/ghc-${profile.version}/dyn-o"
+      mkdir -p "$dynObjectRoot"
+
+      if [ -d _build ]; then
+        find _build -type f -name '*.dyn_o' -print \
+          | while IFS= read -r dyn_object; do
+              install -Dm644 "$dyn_object" "$dynObjectRoot/$dyn_object"
+            done
+      fi
+
+      find "$dynObjectRoot" -type f -name '*.dyn_o' | sort > "$dynObjectRoot/files"
+    '';
 
     passthru = (old.passthru or {}) // {
       crossPatchNotes = {

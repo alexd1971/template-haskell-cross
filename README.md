@@ -177,6 +177,12 @@ Full walkthrough, including version-mismatch handling and troubleshooting:
 There is intentionally no root `packages` output — this repository only
 ships the reusable library, not a package for direct installation.
 
+The value returned by `mkCrossFor` also exposes `targetGhc` and
+`targetGhcDynObjectArchives` for embedders that need target compiler runtime
+artifacts. `targetGhcDynObjectArchives` contains archives built from preserved
+GHC boot-package `.dyn_o` files and is intended for static-Haskell embedding
+integrations.
+
 ## Repository layout
 
 ```text

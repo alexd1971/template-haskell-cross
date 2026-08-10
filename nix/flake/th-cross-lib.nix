@@ -177,6 +177,34 @@ let
           targetOverrides;
     };
 
+  mkCrossGhcDynObjectArchives =
+    { crossPkgs
+    , crossGhc
+    , ghcVersion
+    , targetTriple
+    }:
+    pkgs.runCommand "${targetTriple}-ghc-${ghcVersion}-dyn-object-archives"
+      {
+        nativeBuildInputs = [
+          crossPkgs.stdenv.cc.bintools.bintools
+          pkgs.python3
+        ];
+      }
+      ''
+        set -euo pipefail
+
+        dyn_object_root="${crossGhc}/lib/ghc-${ghcVersion}/dyn-o"
+        dyn_archive_dir="$out/lib/ghc-${ghcVersion}/dyn-archives"
+        target_prefix="${crossPkgs.stdenv.cc.bintools.targetPrefix}"
+
+        ${pkgs.python3}/bin/python3 ${../../tools/build-ghc-dyn-object-archives.py} \
+          --ar "${crossPkgs.stdenv.cc.bintools.bintools}/bin/''${target_prefix}ar" \
+          --ranlib "${crossPkgs.stdenv.cc.bintools.bintools}/bin/''${target_prefix}ranlib" \
+          --ghc-pkg "${crossGhc}/bin/${targetTriple}-ghc-pkg" \
+          --dyn-object-root "$dyn_object_root" \
+          --out "$dyn_archive_dir"
+      '';
+
   mkWorkerWithHostPackages =
     compiler:
     hostPackages:
@@ -491,6 +519,11 @@ EOF
         inherit crossPkgs targetName targetTriple;
         bootPkgs = pkgs.haskell.packages.${compiler.packageSetName};
       };
+      targetGhcDynObjectArchives =
+        mkCrossGhcDynObjectArchives {
+          inherit crossPkgs crossGhc targetTriple;
+          ghcVersion = compiler.version;
+        };
     in
     (mkWorkerEnabledPackageSet {
       inherit crossPkgs crossGhc compiler targetProfile;
@@ -503,6 +536,7 @@ EOF
       # Embedding integrations may need target compiler runtime artifacts.
       # Selecting and packaging them is integration policy, not th-cross.
       targetGhc = crossGhc;
+      inherit targetGhcDynObjectArchives;
     };
 in
 {

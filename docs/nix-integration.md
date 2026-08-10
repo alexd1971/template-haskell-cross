@@ -77,6 +77,10 @@ The value returned by `mkCrossFor` exposes:
   generated expressions with local dependencies.
 - `checkCabalContext`: build only the Cabal context validation probe for a
   package.
+- `targetGhc`: patched target cross-GHC used by the package set.
+- `targetGhcDynObjectArchives`: archives built from preserved target
+  boot-package `.dyn_o` files. Embedding integrations can use these archives
+  when linking Haskell code statically into a target shared library.
 
 Lower-level helpers are kept under `lib.${system}.internal` for repository
 maintenance and diagnostics. They are not the external integration API.

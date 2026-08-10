@@ -31,6 +31,24 @@ on the build host instead:
 Plain nixpkgs cross-GHC needs P1-P3 for this flow. The native worker GHC needs
 P4.
 
+The cross-GHC derivation also disables optional RTS DWARF unwind and NUMA
+support through the standard nixpkgs GHC override flags:
+
+```nix
+enableDwarf = false;
+enableNuma = false;
+```
+
+This is not a source patch. It keeps the compiler RTS from depending on
+`libdw`/`libelf` and `libnuma`, which are not needed for the current
+`-fplugin-library` cross-TH path.
+
+For embedding use cases, the cross-GHC derivation additionally preserves
+boot-package `.dyn_o` files under `lib/ghc-<version>/dyn-o`. `mkCrossFor`
+exposes `targetGhcDynObjectArchives`, which packages those preserved target
+objects into `libHS*.a` archives using the target archiver. This provides the
+cross-compiler equivalent of the native static-Haskell link inputs.
+
 ---
 
 ## P1 — Force `HAVE_INTERNAL_INTERPRETER`
