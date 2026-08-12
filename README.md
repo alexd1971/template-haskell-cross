@@ -162,6 +162,9 @@ Rules of thumb:
 Full walkthrough, including version-mismatch handling and troubleshooting:
 [`docs/external-project-integration.md`](docs/external-project-integration.md).
 
+Browser/WASM support is currently research-only. The latest notes and
+constraints are recorded in [`docs/wasm-browser-research.md`](docs/wasm-browser-research.md).
+
 ## Flake outputs
 
 | Output | Purpose |
