@@ -21,9 +21,9 @@ worker receives splice request
   -> worker returns raw TH AST over the binary-framed protocol
 ```
 
-This replaces the earlier Task 7 isolated `runghc` splice-eval file. The old
-approach proved the process boundary, but it did not have module context and
-could not support `reify`.
+Loading the module preserves the context needed by `reify`. Evaluating an
+isolated splice with `runghc` can establish communication between processes,
+but cannot reproduce that module context.
 
 ## Hook Shape
 

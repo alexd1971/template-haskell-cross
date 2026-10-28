@@ -116,7 +116,10 @@ In cross builds Hadrian copies `stage0/bin/ghc → stage1/bin/ghc`, so
 the flag must be applied to stage0.
 
 **Can this be contributed to GHC?**  `iserv` already receives the same
-flag through Hadrian.  This should be a one-line Hadrian change.
+flag through Hadrian, so exporting symbols for native plugin loading is a
+candidate for a focused Hadrian change. The current flag addresses the tested
+Linux static-linking configuration; an upstream change needs the appropriate
+platform and linking conditions.
 
 ---
 

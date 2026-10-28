@@ -1,32 +1,25 @@
 # Template Haskell `Q` Effects
 
-Historical source references: GHC 9.8.4. The current implementation targets
-GHC 9.10.3, so line-number references in this document are investigative notes,
-not version-independent API documentation.
-
 This document classifies Template Haskell `Q` operations for the implementation
 where the host worker evaluates a splice and sends raw Template Haskell AST
 payloads back to the cross-side plugin.
 
+Source descriptions refer to unpatched GHC 9.10.3; worker-specific additions
+are identified explicitly. These compiler internals can change between GHC
+versions. See [GHC version support](ghc-version-support.md) for the validated
+compiler profiles.
+
 ## Source Locations
 
-Relevant GHC 9.8.4 source files:
+Relevant GHC 9.10.3 source files:
 
 | Area | Source path | Relevant definitions |
 | --- | --- | --- |
-| Public `Q` API | `libraries/template-haskell/Language/Haskell/TH/Syntax.hs` | `class Quasi`, `newtype Q`, `reportWarning`, `reportError`, `recover`, `runIO`, `addDependentFile`, `addTempFile`, `addTopDecls`, `addForeignFile`, `addForeignFilePath`, `addModFinalizer`, `addCorePlugin`, `getQ`, `putQ` |
-| GHC implementation | `compiler/GHC/Tc/Gen/Splice.hs` | `instance TH.Quasi TcM`, `qAddDependentFile`, `qAddTempFile`, `qAddTopDecls`, `qAddForeignFilePath`, `qAddModFinalizer`, `qAddCorePlugin`, `qGetQ`, `qPutQ`, `runRemoteModFinalizers`, `handleTHMessage` |
-| Compiler state | `compiler/GHC/Tc/Types.hs` | `TcGblEnv` fields `tcg_dependent_files`, `tcg_th_topdecls`, `tcg_th_foreign_files`, `tcg_th_modfinalizers`, `tcg_th_coreplugins`, `tcg_th_state` |
-
-Exact GHC 9.8.4 details:
-
-| Item | Location |
-| --- | --- |
-| `Quasi` methods | `Language/Haskell/TH/Syntax.hs`, around lines 94-141 |
-| Public wrappers | `Language/Haskell/TH/Syntax.hs`, around lines 479, 494, 761, 796-882 |
-| `TcM` `Quasi` instance | `GHC/Tc/Gen/Splice.hs`, around lines 1382-1501 |
-| Remote TH request forwarding | `GHC/Tc/Gen/Splice.hs`, around lines 1816-1839 |
-| `TcGblEnv` TH fields | `GHC/Tc/Types.hs`, around lines 557-576 |
+| Public `Q` API | [`Language/Haskell/TH/Syntax.hs`](https://github.com/ghc/ghc/blob/ghc-9.10.3-release/libraries/template-haskell/Language/Haskell/TH/Syntax.hs) | `class Quasi`, `newtype Q`, `reportWarning`, `reportError`, `recover`, `runIO`, `addDependentFile`, `addTempFile`, `addTopDecls`, `addForeignFile`, `addForeignSource`, `addForeignFilePath`, `addModFinalizer`, `addCorePlugin`, `getQ`, `putQ` |
+| GHC implementation | [`GHC/Tc/Gen/Splice.hs`](https://github.com/ghc/ghc/blob/ghc-9.10.3-release/compiler/GHC/Tc/Gen/Splice.hs) | `instance TH.Quasi TcM`, `qAddDependentFile`, `qAddTempFile`, `qAddTopDecls`, `qAddForeignFilePath`, `qAddModFinalizer`, `qAddCorePlugin`, `qGetQ`, `qPutQ`, `runRemoteModFinalizers`, `handleTHMessage` |
+| Compiler state | [`GHC/Tc/Types.hs`](https://github.com/ghc/ghc/blob/ghc-9.10.3-release/compiler/GHC/Tc/Types.hs) | `TcGblEnv` fields `tcg_dependent_files`, `tcg_th_topdecls`, `tcg_th_topnames`, `tcg_th_foreign_files`, `tcg_th_modfinalizers`, `tcg_th_coreplugins`, `tcg_th_state` |
+| Declaration groups | [`GHC/Tc/Module.hs`](https://github.com/ghc/ghc/blob/ghc-9.10.3-release/compiler/GHC/Tc/Module.hs) | `tc_rn_src_decls` |
+| Exact-name lookup | [`GHC/Rename/Env.hs`](https://github.com/ghc/ghc/blob/ghc-9.10.3-release/compiler/GHC/Rename/Env.hs) | `lookupLocalExactGRE` |
 
 ## Key Observation
 
@@ -48,59 +41,43 @@ For correctness, every effect that changes GHC compilation state must either be:
 
 ## Classification
 
-| Operation | GHC 9.8.4 behavior | Current classification | Recommendation |
+| Operation | GHC 9.10.3 behavior | Current classification | Recommendation |
 | --- | --- | --- | --- |
 | `addDependentFile` | `qAddDependentFile` prepends the path to `tcg_dependent_files`. | Forwarded to cross GHC. | The worker response includes `dependentFiles :: [FilePath]`; the cross-side plugin appends them to `tcg_dependent_files`. |
 | `addTempFile` | `qAddTempFile` allocates a GHC-session temp file through `newTempName`. | Host-only effect, covered by smoke test. | Do not replay temp file allocation directly. If the file is later passed to `addForeignFilePath` or `addDependentFile`, propagate that higher-level effect. |
 | `addTopDecls` | Converts TH `Dec`s to `GhcPs` declarations and prepends them to `tcg_th_topdecls`; also tracks exact top names. | Forwarded through the raw TH protocol. | The patched host GHC records raw `[TH.Dec]` values passed to `qAddTopDecls`. The worker response includes those declarations; the cross-side plugin converts them locally and appends them to `tcg_th_topdecls`, or grafts them into a declaration-splice result. `AnnD` is covered by same-GHC-version annotation-wrapper forwarding. |
 | `addForeignFile` / `addForeignSource` | `addForeignFile` is a deprecated alias for `addForeignSource`; `addForeignSource` writes source text to a temp file and calls `addForeignFilePath`. | Forwarded through existing `addForeignFilePath` propagation. | Covered by an integration test. The generated temp file path is host-side but is passed to cross GHC as a foreign file path. |
 | `addForeignFilePath` | `qAddForeignFilePath` prepends `(ForeignSrcLang, FilePath)` to `tcg_th_foreign_files`. | Forwarded to cross GHC. | The worker response includes `foreignFiles`; the cross-side plugin appends them to `tcg_th_foreign_files`, so the target-side build owns compilation/linking. |
-| `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Unsupported in MVP; must be forwarded before production use. | Future protocol can carry `corePlugins :: [String]`; cross-side replay must check that the plugin is available to the cross compiler environment. |
-| `addModFinalizer` | Stores a finalizer reference for later module-finalizer execution with the local environment. | Must be modeled explicitly or unsupported. | Unsupported in MVP. Host execution may run finalizers, but their resulting diagnostics/dependencies/state changes are not automatically visible to cross GHC. |
-| `reportWarning` | `qReport False` adds a diagnostic and continues. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError False message)`. | Forwarded to cross GHC. | The worker response includes this TH diagnostic; the cross-side plugin replays it with `addDiagnostic`. |
-| `reportError` | `qReport True` adds an error; the splice may continue unless it fails. GHC 9.8.4 represents it as `TcRnTHError (ReportCustomQuasiError True message)`. | Partially forwarded. | The protocol can carry this TH diagnostic and the cross-side plugin replays it with `addErr`. If host GHC fails before a splice result is captured, the worker still returns a worker error string. |
+| `addCorePlugin` | Validates the plugin is not from the current home unit and prepends the module name to `tcg_th_coreplugins`. | Unsupported; cross-side replay is not implemented. | Future protocol can carry `corePlugins :: [String]`; cross-side replay must check that the plugin is available to the cross compiler environment. |
+| `addModFinalizer` | Stores a finalizer reference for later module-finalizer execution with the local environment. | Unsupported; cross-side finalizer timing and effects are not modeled. | Unsupported in the current implementation. Host execution may run finalizers, but their resulting diagnostics/dependencies/state changes are not automatically visible to cross GHC. |
+| `reportWarning` | `qReport False` adds a diagnostic and continues. GHC 9.10.3 represents it as `TcRnTHError (ReportCustomQuasiError False message)`. | Forwarded to cross GHC. | The worker response includes this TH diagnostic; the cross-side plugin replays it with `addDiagnostic`. |
+| `reportError` | `qReport True` adds an error; the splice may continue unless it fails. GHC 9.10.3 represents it as `TcRnTHError (ReportCustomQuasiError True message)`. | Partially forwarded. | The protocol can carry this TH diagnostic and the cross-side plugin replays it with `addErr`. If host GHC fails before a splice result is captured, the worker still returns a worker error string. |
 | `recover` | `qRecover` uses `tryTcDiscardingErrs`; recovered errors are discarded if the recovery branch is used. | Safe automatically inside host evaluation, covered by integration test. | No replay needed for `recover` itself. Effects produced by the branch that actually runs still need their own classification. |
 | `getQ` | Reads module-local TH state from `tcg_th_state`. | Host-local, safe for host-evaluated splices in one module load, covered by integration test. | No cross replay needed while all splices in the module are evaluated by the host worker. Document as unsupported for mixed host/cross TH execution. |
 | `putQ` | Writes module-local TH state into `tcg_th_state`. | Host-local, safe for host-evaluated splices in one module load, covered by integration test. | Same as `getQ`. Whole-module host expansion preserves ordering-dependent `Q` state for captured results. |
 | `runIO` | Runs arbitrary `IO` in the host process. | Host-only effect, covered by integration test. | The raw TH result reflects the returned value, but external side effects are not replayed. Users must call `addDependentFile` for file dependencies. Target-only IO assumptions are unsupported. |
 
-## MVP Policy
+## Current Support
 
-The current MVP should support:
-
-```text
-primary raw TH payload
-reportError as replayed diagnostic when the host worker captures a splice result
-recover behavior inside host execution
-getQ/putQ inside one whole-module host load
-runIO execution on the host
-addTempFile allocation and use on the host
-addForeignFilePath propagation to the cross GHC session
-addTopDecls smoke propagation to the cross GHC session
-```
-
-The current MVP should explicitly not support:
-
-```text
-addCorePlugin
-addModFinalizer
-complete diagnostic replay
-arbitrary Q effect replay
-```
-
-Implemented in the current code:
+The implementation transfers the primary raw TH payload and handles these
+effects:
 
 ```text
 addDependentFile propagation
 addForeignSource/addForeignFile propagation through generated foreign file paths
 addForeignFilePath propagation
-addTopDecls smoke propagation
+addTopDecls propagation for the tested splice contexts described below
 reportWarning/reportError diagnostics propagation
 runIO host execution
 addTempFile host execution
 recover host semantics
 getQ/putQ host module state
 ```
+
+`addCorePlugin` and `addModFinalizer` are unsupported. Complete diagnostic
+replay and arbitrary `Q` effect replay are not implemented. Unsupported uses
+are not always rejected: native execution can produce effects that are never
+applied to the cross compilation.
 
 `addDependentFile` and `addForeignFilePath` directly affect build correctness and
 have simple replay shapes.
@@ -116,7 +93,7 @@ Current binary response fields carry:
 - `diagnostics :: [SpliceDiagnostic]`;
 - optional same-GHC-version annotation-wrapper bytes.
 
-## `addTopDecls` Investigation
+## `addTopDecls` Handling
 
 Template Haskell public API:
 
@@ -126,14 +103,14 @@ addTopDecls :: [Dec] -> Q ()
 
 Source:
 
-- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`, around line 805
+- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`
 - `compiler/GHC/Tc/Gen/Splice.hs`, `instance TH.Quasi TcM`, `qAddTopDecls`
 - `compiler/GHC/Tc/Module.hs`, `tc_rn_src_decls`
 - `compiler/GHC/Rename/Env.hs`, `lookupLocalExactGRE`
 - `compiler/GHC/Tc/Types.hs`, `TcGblEnv` fields `tcg_th_topdecls` and
   `tcg_th_topnames`
 
-GHC 9.8.4 implementation shape:
+GHC 9.10.3 implementation shape:
 
 ```haskell
 qAddTopDecls thds = do
@@ -166,7 +143,7 @@ tcg_th_topdecls :: TcRef [LHsDecl GhcPs]
 tcg_th_topnames :: TcRef NameSet
 ```
 
-GHC 9.8.4 consumer path:
+GHC 9.10.3 consumer path:
 
 - `compiler/GHC/Tc/Module.hs`, `tc_rn_src_decls`
 - after `rnTopSrcDecls first_group`, GHC reads `tcg_th_topdecls`;
@@ -202,14 +179,15 @@ Why this is harder than `addDependentFile` or `addForeignFilePath`:
   appending declarations to a side list may be too late if later declarations in
   the same group depend on them.
 - `tcg_th_topnames` matters for exact-name tracking. The cross-side plugin
-  mirrors exact binders for replayed `addTopDecls`; declaration splices still
-  use Strategy B grafting so the added declarations and primary result are
-  returned as one `MetaD` expansion.
+  mirrors exact binders for replayed `addTopDecls`. For declaration splices,
+  it combines the added declarations and primary result into one `MetaD`
+  expansion.
 
-The current code uses a hybrid implementation: Strategy A for non-declaration
-splices, and Strategy B for declaration splices.
+The current code replays non-declaration-splice additions through
+`tcg_th_topdecls` and combines declaration-splice additions with the `MetaD`
+result.
 
-### Strategy A: replay through `tcg_th_topdecls`
+### Non-declaration splices: replay through `tcg_th_topdecls`
 
 Conceptual flow:
 
@@ -221,7 +199,7 @@ host splice executes
   -> cross plugin appends them to cross tcg_th_topdecls
 ```
 
-Why it is attractive:
+Properties:
 
 - It mirrors GHC's own state shape: `qAddTopDecls` ultimately updates
   `tcg_th_topdecls`.
@@ -251,9 +229,9 @@ Required implementation details:
 
 Current validation:
 
-The implementation covers Strategy A far enough to pass native-GHC-valid tests
-where expression splices call `addTopDecls`. The host worker captures the added
-declarations, sends them as `addedTopDecls`, and the cross-side plugin logs
+Replay through `tcg_th_topdecls` passes native-GHC-valid tests where expression
+splices call `addTopDecls`. The host worker captures the added declarations,
+sends them as `addedTopDecls`, and the cross-side plugin logs
 `th-cross: added top decls N` after replay.
 
 Integration coverage now includes:
@@ -269,7 +247,7 @@ Integration coverage now includes:
   GHC 9.8.4 routes this case through the existing `MetaE` hook path;
 - success: declaration splice where the returned declarations reference a
   binding introduced through `addTopDecls` with an exact `newName`; this uses
-  Strategy B grafting for `MetaD`;
+  grafting into the `MetaD` result;
 - expected failure: invalid declaration passed to `addTopDecls`;
 - expected failure: declaration added through `addTopDecls` contains a normal
   typechecking error.
@@ -337,7 +315,7 @@ Relevant upstream GHC 9.8.4 tests found in `testsuite/tests/th`:
   splices. In the GHC 9.8.4 testsuite this test is marked `expect_broken(13587)`,
   so it is not a stable acceptance test for this implementation yet.
 
-### Strategy B: graft raw declarations into declaration splice expansion
+### Declaration splices: combine added declarations with the splice result
 
 Conceptual flow:
 
@@ -350,7 +328,7 @@ host declaration splice executes
   -> runMetaHook returns combined [LHsDecl GhcPs] from MetaD
 ```
 
-Why it is attractive:
+Properties:
 
 - It avoids relying on direct mutation of `tcg_th_topdecls` on the cross side.
 - Returned declarations go through the normal `MetaD` result path, so GHC sees
@@ -394,29 +372,27 @@ This is native-GHC-valid because the returned declaration references the exact
 name introduced by `addTopDecls`. Raw replay preserves that relationship because
 both the added declarations and the splice result carry the same `NameU`.
 
-### Strategy Status
+### Replay Mechanisms
 
-| Criterion | Strategy A: `tcg_th_topdecls` replay | Strategy B: `MetaD` grafting |
+| Criterion | Replay through `tcg_th_topdecls` | Combine with the `MetaD` result |
 | --- | --- | --- |
 | Current role | Primary path for non-declaration splices | Primary path for declaration splices |
 | Scope | Potentially full `addTopDecls` semantics | Declaration splices only |
 | Cross-side mechanism | Mutate GHC TH state refs | Return larger `MetaD` result |
 | Ordering risk | Reduced for native-GHC-valid expression-splice cases now covered by tests | Lower for declaration splices, but narrower semantics |
 | `tcg_th_topnames` risk | Cross-side replay mirrors exact binders into `tcg_th_topnames` | Normal declaration splice path handles names directly |
-| Expression-splice support | Possible | Not supported initially |
+| Expression-splice support | Implemented for tested cases | Not applicable |
 | Current status | Implemented for a tested subset | Implemented for a tested subset |
-| Semantic completeness | Better target | Partial but more controlled |
+| Semantic completeness | Limited to tested contexts | Limited to declaration splices |
 
-Recommendation:
+Both mechanisms are needed:
 
-Use a hybrid implementation:
-
-- Strategy A remains necessary for expression splices, including typed
-  expression splices routed through `MetaE`, because they cannot return a larger
-  declaration-splice result.
-- Strategy B is preferable for declaration splices because it avoids a confirmed
-  exact-name loss when the declaration-splice result references names introduced
-  by `addTopDecls`.
+- Replay through `tcg_th_topdecls` remains necessary for expression splices,
+  including typed expression splices routed through `MetaE`, because they
+  cannot return a larger declaration-splice result.
+- Combining additions with the `MetaD` result is preferable for declaration
+  splices because it avoids a confirmed exact-name loss when the
+  declaration-splice result references names introduced by `addTopDecls`.
 
 The current implementation is still subset support, not full semantic support.
 Before declaring full support, add native-GHC-valid tests for type and pattern
@@ -436,9 +412,9 @@ fragments independently, module-local `Q` state will not be preserved.
 host GHC session and may be cleaned up by GHC. Any durable consequence must be
 represented through another effect, such as `addForeignFilePath`.
 
-## `addForeignSource` / `addForeignFile` Investigation
+## `addForeignSource` / `addForeignFile` Handling
 
-GHC 9.8.4 public API:
+GHC 9.10.3 public API:
 
 ```haskell
 addForeignFile :: ForeignSrcLang -> String -> Q ()
@@ -449,16 +425,15 @@ addForeignFilePath :: ForeignSrcLang -> FilePath -> Q ()
 Source:
 
 - `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`,
-  `addForeignFile`, around lines 809-813
+  `addForeignFile`
 - `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`,
-  `addForeignSource`, around lines 832-844
+  `addForeignSource`
 - `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`,
-  `addForeignFilePath`, around lines 852-853
-- `compiler/GHC/Tc/Gen/Splice.hs`, `qAddForeignFilePath`, around lines
-  1470-1472
-- `compiler/GHC/Tc/Types.hs`, `tcg_th_foreign_files`, around line 562
+  `addForeignFilePath`
+- `compiler/GHC/Tc/Gen/Splice.hs`, `qAddForeignFilePath`
+- `compiler/GHC/Tc/Types.hs`, `tcg_th_foreign_files`
 
-In GHC 9.8.4, `addForeignFile` is deprecated:
+In GHC 9.10.3, `addForeignFile` is deprecated:
 
 ```text
 Use 'Language.Haskell.TH.Syntax.addForeignSource' instead
@@ -511,7 +486,7 @@ by the same mechanism. The integration suite includes a smoke test where
 host-side TH calls `addForeignSource LangC ...` and the cross-side plugin logs a
 replayed `foreign file c ...` entry.
 
-### MVP Decision
+### Support and Limitations
 
 `addForeignSource` and deprecated `addForeignFile` are considered supported to
 the same extent as `addForeignFilePath`.
@@ -525,9 +500,9 @@ Important caveat:
   worker/module build directory, not a temp location that can disappear too
   early.
 
-## `addModFinalizer` Investigation
+## `addModFinalizer` Handling
 
-GHC 9.8.4 public API:
+GHC 9.10.3 public API:
 
 ```haskell
 addModFinalizer :: Q () -> Q ()
@@ -535,14 +510,11 @@ addModFinalizer :: Q () -> Q ()
 
 Source:
 
-- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`, around lines
-  861-862
-- `compiler/GHC/Tc/Gen/Splice.hs`, `qAddModFinalizer`, around lines 1474-1477
-- `compiler/GHC/Tc/Gen/Splice.hs`, `addModFinalizerRef`, around lines
-  1648-1657
-- `compiler/GHC/Tc/Gen/Splice.hs`, `runRemoteModFinalizers`, around lines
-  1056-1060
-- `compiler/GHC/Tc/Types.hs`, `tcg_th_modfinalizers`, around line 568
+- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`
+- `compiler/GHC/Tc/Gen/Splice.hs`, `qAddModFinalizer`
+- `compiler/GHC/Tc/Gen/Splice.hs`, `addModFinalizerRef`
+- `compiler/GHC/Tc/Gen/Splice.hs`, `runRemoteModFinalizers`
+- `compiler/GHC/Tc/Types.hs`, `tcg_th_modfinalizers`
 
 GHC stores module finalizers as delayed `Q ()` actions, not as Haskell source
 fragments:
@@ -587,9 +559,9 @@ However, this is not a correct cross-side implementation:
   warning might be visible in logs, but that is not the same as replaying a
   cross-side GHC diagnostic.
 
-### MVP Decision
+### Support and Limitations
 
-`addModFinalizer` remains unsupported in the MVP.
+`addModFinalizer` remains unsupported in the current implementation.
 
 Do not treat host execution of finalizers as support. It is host-only behavior
 unless the worker records finalizer-produced effects and the cross-side plugin
@@ -610,9 +582,9 @@ This requires careful ordering. Replaying finalizer effects too early could
 change normal GHC staging semantics; replaying them per splice would duplicate
 effects.
 
-## `addCorePlugin` Investigation
+## `addCorePlugin` Handling
 
-GHC 9.8.4 public API:
+GHC 9.10.3 public API:
 
 ```haskell
 addCorePlugin :: String -> Q ()
@@ -620,12 +592,10 @@ addCorePlugin :: String -> Q ()
 
 Source:
 
-- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`, around lines
-  864-872
-- `compiler/GHC/Tc/Gen/Splice.hs`, `qAddCorePlugin`, around lines 1479-1492
-- `compiler/GHC/Tc/Gen/Splice.hs`, remote TH `AddCorePlugin` handling, around
-  line 1837
-- `compiler/GHC/Tc/Types.hs`, `tcg_th_coreplugins`, around lines 573-574
+- `libraries/template-haskell/Language/Haskell/TH/Syntax.hs`
+- `compiler/GHC/Tc/Gen/Splice.hs`, `qAddCorePlugin`
+- `compiler/GHC/Tc/Gen/Splice.hs`, `handleTHMessage`, `AddCorePlugin`
+- `compiler/GHC/Tc/Types.hs`, `tcg_th_coreplugins`
 
 The public documentation says:
 
@@ -666,9 +636,9 @@ that effect.
 This is not safe to silently ignore for real builds: a core plugin can change
 Core-to-Core optimization or even program semantics.
 
-### MVP Decision
+### Support and Limitations
 
-`addCorePlugin` remains unsupported in the MVP.
+`addCorePlugin` remains unsupported in the current implementation.
 
 Unlike `addModFinalizer`, this effect would have a simple wire shape:
 
